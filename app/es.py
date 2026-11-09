@@ -240,10 +240,16 @@ def battery_activated_on(settings: dict) -> bool:
     return settings["battery_activated"] > 0
 
 
-def power_factor(settings: dict) -> float:
+def power_factor(settings: dict) -> float | None:
+    """Faithful to SolarGo's byte2ToIntNew: only a 0xFF high byte is sign-extended, then values
+    0..20 map to a negative factor. 0xFFFF means "not set" and is shown as such."""
     raw = settings["power_factor_raw"]
-    value = raw - 100 if 0 <= raw <= 20 else raw  # SolarGo: 0..20 means a negative factor
-    return value / 100
+    if raw == 0xFFFF:
+        return None
+    value = raw - 0x10000 if (raw >> 8) == 0xFF else raw
+    if 0 <= value <= 20:
+        value -= 100
+    return round(value / 100, 2)
 
 
 def settings_fields(s: dict, offgrid_dod_raw: int | None = None, dred: int | None = None) -> dict[str, list[Field]]:
@@ -335,12 +341,15 @@ def settings_fields(s: dict, offgrid_dod_raw: int | None = None, dred: int | Non
     grid: list[Field] = []
     if dred is not None:
         grid.append(
-            Field("dred", "DRED / Remote Shutdown / RCR", _onoff(dred == 1), raw=dred, protected=True,
+            Field("dred", "DRED / Remote Shutdown / RCR", _onoff(dred == 1), raw=dred,
+                  control={"type": "switch", "setting": "dred", "on": dred == 1,
+                           "warning": "This tells the inverter to obey an external grid-operator control input "
+                                      "(demand response / remote shutdown / ripple control) on its DRED port. "
+                                      "Turning it ON without the right device connected can stop the inverter "
+                                      "from working normally (SolarGo gives the same warning)."},
                   help="Lets an external signal limit or stop the inverter: a demand-response device (DRED), a "
                        "remote shutdown contact or a ripple-control receiver (RCR) wired to the inverter's DRED "
-                       "port. It is a grid-operator control function, so the portal shows it read-only. SolarGo "
-                       "warns that enabling it on hardware that does not support it can stop the inverter from "
-                       "working normally.")
+                       "port. With nothing connected it has no effect. Register 0xB7BC.")
         )
     grid += [
         Field("export_limit_enabled", "Export limit", _onoff(s["export_limit_enabled_raw"] == 1),
@@ -376,10 +385,13 @@ def settings_fields(s: dict, offgrid_dod_raw: int | None = None, dred: int | Non
               help="Starts the inverter from the battery when there is no grid, to power the backup loads (Backup "
                    "output must be on). SolarGo only offers it while the grid is missing; the portal does not "
                    "send it."),
-        Field("power_factor", "Power factor", power_factor(s), raw=s["power_factor_raw"], protected=True,
+        Field("power_factor", "Power factor",
+              power_factor(s) if power_factor(s) is not None else "not set",
+              raw=s["power_factor_raw"], protected=True,
+              note="0xFFFF = not set on this firmware" if power_factor(s) is None else "",
               help="Fixed power factor (cos φ) of the power fed to the grid: 1 = only active power, lower values "
-                   "make the inverter also exchange reactive power (the sign selects absorbed or supplied). "
-                   "Reactive power behaviour is part of the grid code (CEI 0-21), so it is read-only here."),
+                   "make the inverter also exchange reactive power. Decoded exactly as SolarGo does. "
+                   "Reactive power behaviour is part of the grid code, so it is read-only here."),
         Field("overload_reset", "Clear overload history", "",
               control={"type": "action", "setting": "overload_reset", "button": "Clear",
                        "warning": "Resets the backup overload reconnection time to its default."},
@@ -497,100 +509,6 @@ def eco_conflicts(groups: list[EcoGroup], candidate: EcoGroup) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Grid protection parameters (read-only, Modbus 0xB158.. and 0xB169..)
-# ---------------------------------------------------------------------------
-
-# (register, label, kind) – kind selects unit, scaling and explanation
-PROTECTION_BLOCK = (0xB158, 17)
-PROTECTION_FIELDS = [
-    (0xB158, "Overvoltage stage 1", "ov"),
-    (0xB159, "Overvoltage stage 1 – trip time", "time"),
-    (0xB15A, "Undervoltage stage 1", "uv"),
-    (0xB15B, "Undervoltage stage 1 – trip time", "time"),
-    (0xB15C, "Overvoltage stage 2", "ov"),
-    (0xB15D, "Overvoltage stage 2 – trip time", "time"),
-    (0xB15E, "Undervoltage stage 2", "uv"),
-    (0xB15F, "Undervoltage stage 2 – trip time", "time"),
-    (0xB160, "10-minute average overvoltage", "ov10"),
-    (0xB161, "Overfrequency stage 1", "of"),
-    (0xB162, "Overfrequency stage 1 – trip time", "time"),
-    (0xB163, "Underfrequency stage 1", "uf"),
-    (0xB164, "Underfrequency stage 1 – trip time", "time"),
-    (0xB165, "Overfrequency stage 2", "of"),
-    (0xB166, "Overfrequency stage 2 – trip time", "time"),
-    (0xB167, "Underfrequency stage 2", "uf"),
-    (0xB168, "Underfrequency stage 2 – trip time", "time"),
-]
-CONNECT_BLOCK = (0xB169, 16)
-CONNECT_FIELDS = [
-    (0xB169, "Connection voltage – max", "conn_v"),
-    (0xB16A, "Connection voltage – min", "conn_v"),
-    (0xB16B, "Connection frequency – max", "conn_f"),
-    (0xB16C, "Connection frequency – min", "conn_f"),
-    (0xB16D, "Wait time before connecting", "conn_wait"),
-    (0xB16E, "Reconnection after a trip: voltage max", "reconn_v"),
-    (0xB16F, "Reconnection after a trip: voltage min", "reconn_v"),
-    (0xB170, "Reconnection after a trip: frequency max", "reconn_f"),
-    (0xB171, "Reconnection after a trip: frequency min", "reconn_f"),
-    (0xB172, "Reconnection after a trip: wait time", "reconn_wait"),
-    (0xB173, "Reconnection after a frequency trip: wait time", "reconn_wait"),
-    (0xB174, "Power ramp on connection", "ramp"),
-    (0xB175, "Power ramp after a trip", "ramp"),
-    (0xB178, "Power ramp enabled", "ramp_en"),
-]
-
-# kind -> (unit, divisor, explanation)
-_PROTECTION_KINDS: dict[str, tuple[str, float, str]] = {
-    "ov": ("V", 10, "Overvoltage protection: if the grid voltage stays above this value for longer than the "
-                    "matching trip time, the inverter disconnects from the grid. Stage 2 is normally a higher "
-                    "voltage with a shorter time, for faster reaction to larger faults."),
-    "uv": ("V", 10, "Undervoltage protection: if the grid voltage stays below this value for longer than the "
-                    "matching trip time, the inverter disconnects. Stage 2 is normally a lower voltage with a "
-                    "shorter time."),
-    "ov10": ("V", 10, "Slow overvoltage protection: the inverter disconnects if the voltage averaged over 10 "
-                      "minutes exceeds this value. It limits the voltage rise that a PV system causes on the "
-                      "local grid."),
-    "of": ("Hz", 100, "Overfrequency protection: the inverter disconnects if the grid frequency stays above this "
-                      "value for longer than the trip time. Too-high frequency means too much generation on the "
-                      "grid."),
-    "uf": ("Hz", 100, "Underfrequency protection: the inverter disconnects if the grid frequency stays below this "
-                      "value for longer than the trip time."),
-    "time": ("s", 50, "How long the condition above must last before the inverter disconnects. The inverter "
-                      "stores it in grid periods of 20 ms (1/50 s); SolarGo shows it in seconds, as here."),
-    "conn_v": ("V", 10, "At start-up the inverter connects to the grid only if the voltage is inside this range."),
-    "conn_f": ("Hz", 100, "At start-up the inverter connects only if the frequency is inside this range."),
-    "conn_wait": ("s", 1, "How long voltage and frequency must stay inside the connection range before the "
-                          "inverter connects at start-up."),
-    "reconn_v": ("V", 10, "After a protection trip, the inverter reconnects only when the voltage is back inside "
-                          "this range."),
-    "reconn_f": ("Hz", 100, "After a protection trip, the inverter reconnects only when the frequency is back "
-                            "inside this range."),
-    "reconn_wait": ("s", 1, "After a protection trip, how long the grid must be back inside the reconnection "
-                            "range before the inverter reconnects."),
-    "ramp": ("", 1, "How gradually the inverter ramps its output up after connecting, so that many inverters "
-                    "reconnecting together do not cause a step on the grid. Raw value as stored by the inverter."),
-    "ramp_en": ("", 1, "Whether the gradual power ramp above is used (1 = on)."),
-}
-
-
-def parse_register_block(start: int, data: bytes, spec) -> list[Field]:  # noqa: ANN001
-    out = []
-    for reg, label, kind in spec:
-        off = (reg - start) * 2
-        if off + 2 > len(data):
-            continue
-        unit, div, help_text = _PROTECTION_KINDS[kind]
-        raw = _u16(data, off)
-        value = round(raw / div, 3) if div != 1 else raw
-        out.append(
-            Field(f"reg_{reg:04X}", label, value, unit, raw=raw, protected=True,
-                  note=f"register 0x{reg:04X}",
-                  help=help_text + " Grid interface protection (CEI 0-21): read-only.")
-        )
-    return out
-
-
-# ---------------------------------------------------------------------------
 # Reads: the sequence the portal runs when the page is opened / refreshed
 # ---------------------------------------------------------------------------
 
@@ -608,16 +526,7 @@ def page_read_steps() -> list[ReadStep]:
         ReadStep("settings", "Settings (0x0109)", p.read_settings()),
         ReadStep("eco", "Eco groups (registers 0x0701-0x0710)", p.read_registers(ECO_BASE, ECO_GROUPS * ECO_REGS_PER_GROUP)),
         ReadStep("offgrid_dod", "Off-grid DoD (register 0x05A1)", p.read_registers(REG_OFFGRID_DOD, 1)),
-        ReadStep("dred", "DRED / remote shutdown (Modbus 0xB7BC)", p.ModbusReadRequest(REG_DRED, 1)),
-    ]
-
-
-def protection_read_steps() -> list[ReadStep]:
-    return [
-        ReadStep("protection", "Protection parameters (Modbus 0xB158, 17 registers)",
-                 p.ModbusReadRequest(*PROTECTION_BLOCK)),
-        ReadStep("connect", "Connection parameters (Modbus 0xB169, 16 registers)",
-                 p.ModbusReadRequest(*CONNECT_BLOCK)),
+        ReadStep("dred", "DRED / remote shutdown (Modbus 0xB7BC)", p.ModbusReadRequest(0xB7BC, 1)),
     ]
 
 
@@ -926,4 +835,23 @@ def plan_overload_reset() -> WritePlan:
         after="cleared",
         steps=[WriteStep("clear overload history", p.classic_command(0x5E, bytes([0x0F])))],
         verify=[],
+    )
+
+
+REG_DRED_WRITE = 0xB7BC
+
+
+def plan_dred(current: int | None, enabled: bool) -> WritePlan:
+    """SolarGo setDred: Modbus write-single 0xB7BC = 1 (on) / 0 (off)."""
+    return WritePlan(
+        setting="dred",
+        label="DRED / Remote Shutdown / RCR",
+        before=_onoff(current == 1) if current is not None else None,
+        after=_onoff(enabled),
+        steps=[WriteStep(f"DRED {_onoff(enabled)} (register 0xB7BC = {1 if enabled else 0})",
+                         p.ModbusWriteRequest(REG_DRED_WRITE, 1 if enabled else 0))],
+        verify=["dred"],
+        warning="" if not enabled else
+                "Turning DRED on tells the inverter to obey an external control input. Only do this with the "
+                "right device connected; otherwise it can stop the inverter from operating normally.",
     )

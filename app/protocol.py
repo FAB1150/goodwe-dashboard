@@ -163,6 +163,30 @@ class ModbusReadRequest:
         return body + crc16_modbus(body).to_bytes(2, "little")
 
 
+@dataclass(frozen=True)
+class ModbusWriteRequest:
+    """Modbus write-single-register (function 0x06): F7 06 <reg> <value> <crc>."""
+
+    reg: int
+    value: int  # already encoded as an unsigned 16-bit register value
+    addr: int = MODBUS_ADDR
+
+    def to_bytes(self) -> bytes:
+        body = bytes([self.addr, 0x06]) + self.reg.to_bytes(2, "big") + (self.value & 0xFFFF).to_bytes(2, "big")
+        return body + crc16_modbus(body).to_bytes(2, "little")
+
+
+def parse_modbus_write(req: ModbusWriteRequest, raw: bytes) -> bytes:
+    # The inverter echoes AA55 <addr> 06 <reg> <value> <crc> (sometimes 0x10/0x03 per SolarGo).
+    if len(raw) < 6 or raw[0:2] != HEADER:
+        raise ProtocolError("invalid Modbus write response")
+    if raw[3] & 0x80:
+        raise ProtocolError(f"the inverter rejected the write (code {raw[4]:02X})")
+    if raw[3] not in (0x06, 0x10, 0x03):
+        raise ProtocolError(f"unexpected Modbus function {raw[3]:02X}")
+    return raw[2:-2]
+
+
 def parse_modbus_read(req: ModbusReadRequest, raw: bytes) -> bytes:
     if len(raw) < 7 or raw[0:2] != HEADER:
         raise ProtocolError("invalid Modbus response")
@@ -180,13 +204,15 @@ def parse_modbus_read(req: ModbusReadRequest, raw: bytes) -> bytes:
     return raw[5:-2]
 
 
-Request = Aa55Request | ModbusReadRequest
+Request = Aa55Request | ModbusReadRequest | ModbusWriteRequest
 
 
 def describe(req: Request) -> str:
     """Human-readable description of a frame, used by the dry-run mode."""
     if isinstance(req, ModbusReadRequest):
         return f"Modbus read {req.count} registers from 0x{req.start:04X}"
+    if isinstance(req, ModbusWriteRequest):
+        return f"Modbus write register 0x{req.reg:04X} = {req.value} (0x{req.value & 0xFFFF:04X})"
     code = f"{req.ctrl:02X}{req.func:02X}"
     src = f"src {req.src:02X}"
     if req.ctrl == 0x01 and req.func == 0x1A:

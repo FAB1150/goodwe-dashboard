@@ -3,6 +3,10 @@
 const $ = (s) => document.querySelector(s);
 let view = {};
 let config = {};
+const UNLOCK_PHRASE = "I UNDERSTAND";
+let safetyUnlocked = false;
+let safetyData = null;
+let safetyTab = null;
 
 function esc(v) {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -150,14 +154,53 @@ function render() {
     renderRows($("#grid"), d.settings.grid);
   }
   if (d.eco) Schedule.load(d.eco);
-  if (d.protection) renderRows($("#protection"), d.protection);
-  if (d.connect) renderRows($("#connect"), d.connect);
+  if (d.safety) renderSafety(d.safety);
 
   const times = Object.values(d.read_at || {});
   if (times.length) {
     const t = new Date(Math.max(...times) * 1000);
     $("#readinfo").textContent = `Last read from the inverter: ${t.toLocaleString()}. Values do not refresh on their own.`;
   }
+}
+
+function renderSafety(safety) {
+  safetyData = safety;
+  const groups = safety.groups || [];
+  const tabs = $("#safety-tabs");
+  if (!groups.length) { tabs.classList.add("hidden"); $("#safety-body").innerHTML = ""; return; }
+  if (!groups.some((g) => g.key === safetyTab)) safetyTab = groups[0].key;
+  tabs.classList.remove("hidden");
+  tabs.innerHTML = groups.map((g) =>
+    `<button type="button" class="tab ${g.key === safetyTab ? "on" : ""}" data-tab="${g.key}">${esc(g.title)}</button>`).join("");
+  const group = groups.find((g) => g.key === safetyTab) || groups[0];
+  $("#safety-body").innerHTML = group.fields.map(safetyRow).join("");
+}
+
+function safetyRow(f) {
+  const e = f.edit;
+  let control;
+  if (safetyUnlocked && e) {
+    const id = `ctl-${e.setting.replace(":", "_")}`;
+    if (e.kind === "switch") {
+      control = `<label class="toggle"><input type="checkbox" role="switch" id="${id}" data-safety="${e.setting}" data-kind="safety-switch" ${e.on ? "checked" : ""} aria-label="${esc(f.label)}"><span class="track"></span></label>
+        <button type="button" class="danger small-btn" data-safety="${e.setting}" data-kind="safety-switch-btn">Set</button>`;
+    } else {
+      const range = (e.min !== null && e.max !== null) ? `<span class="raw">[${e.min}, ${e.max}]</span>` : "";
+      control = `<span class="inline"><input type="number" id="${id}" step="any" ${e.min !== null ? `min="${e.min}"` : ""} ${e.max !== null ? `max="${e.max}"` : ""} value="${esc(f.value)}" aria-label="${esc(f.label)}">${f.unit ? `<span>${esc(f.unit)}</span>` : ""}
+        <button type="button" class="danger small-btn" data-safety="${e.setting}" data-kind="safety-number">Set</button></span>${range}`;
+    }
+  } else {
+    const lock = e ? "" : ` <span class="badge lock">set from SolarGo</span>`;
+    control = `<span class="val">${esc(f.value)}${f.unit ? ` ${esc(f.unit)}` : ""}</span>${lock}<span class="raw">raw ${esc(f.raw)}</span>`;
+  }
+  return `<div class="srow${safetyUnlocked && f.edit ? " editable" : " protected"}">
+      <div class="slabel"><span>${esc(f.label)}</span>${helpBtn(f.help)}<div class="raw">${esc(f.note)}</div></div>
+      <div class="sval">${control}</div>
+    </div>`;
+}
+
+async function doSafetySave(setting, value, btn) {
+  await save(setting, { value, unlock: UNLOCK_PHRASE }, btn);
 }
 
 function renderExchanges(list) {
@@ -239,7 +282,9 @@ document.addEventListener("change", (ev) => {
 });
 
 document.addEventListener("click", (ev) => {
-  const t = ev.target.closest("button[data-kind]");
+  const tab = ev.target.closest("#safety-tabs .tab");
+  if (tab) { safetyTab = tab.dataset.tab; renderSafety(safetyData); return; }
+  const t = ev.target.closest("button[data-kind], button[data-safety]");
   if (!t) return;
   const setting = t.dataset.setting;
   if (t.dataset.kind === "number") {
@@ -252,8 +297,45 @@ document.addEventListener("click", (ev) => {
     save(setting, { value: Number(v) }, t);
   } else if (t.dataset.kind === "action") {
     save(setting, {}, t);
+  } else if (t.dataset.kind === "safety-number") {
+    const v = $(`#ctl-${t.dataset.safety.replace(":", "_")}`).value;
+    if (v === "") { banner("Enter a value first."); return; }
+    doSafetySave(t.dataset.safety, Number(v), t);
+  } else if (t.dataset.kind === "safety-switch-btn") {
+    const v = $(`#ctl-${t.dataset.safety.replace(":", "_")}`).checked;
+    doSafetySave(t.dataset.safety, v, t);
   }
 });
+
+// Unlock gate for the protection parameters
+$("#safety-unlock").addEventListener("change", (e) => {
+  if (!e.target.checked) { safetyUnlocked = false; renderSafety(safetyData); updateSafetyBadge(); return; }
+  e.target.checked = false; // only the modal can turn it on
+  const dlg = $("#unlock-dlg");
+  const input = $("#unlock-input");
+  const go = $("#unlock-go");
+  input.value = "";
+  go.disabled = true;
+  input.oninput = () => { go.disabled = input.value.trim().toUpperCase() !== UNLOCK_PHRASE; };
+  dlg.returnValue = "";
+  dlg.showModal();
+  dlg.addEventListener("close", () => {
+    if (dlg.returnValue === "go" && input.value.trim().toUpperCase() === UNLOCK_PHRASE) {
+      safetyUnlocked = true;
+      $("#safety-unlock").checked = true;
+      banner("Protection-parameter editing is unlocked for this session. Change these values only if you are qualified to.", false);
+    }
+    renderSafety(safetyData);
+    updateSafetyBadge();
+  }, { once: true });
+});
+
+function updateSafetyBadge() {
+  const b = $("#safety-badge");
+  b.textContent = safetyUnlocked ? "EDITING ENABLED" : "read-only";
+  b.classList.toggle("danger-badge", safetyUnlocked);
+  b.classList.toggle("lock", !safetyUnlocked);
+}
 
 Schedule.init($("#schedule"), (groups, btn) => save("eco_schedule", { groups }, btn), (msg) => banner(msg));
 

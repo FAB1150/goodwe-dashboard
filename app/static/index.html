@@ -59,14 +59,17 @@
   </section>
 
   <section class="card" id="sec-protection">
-    <h2>Grid interface protection (CEI 0-21) <span class="badge lock">read-only</span>
-      <button type="button" class="help" aria-label="Explain" data-help="Interface protection decides when the inverter must disconnect from the grid (voltage or frequency out of range for too long) and when it may reconnect. The values come from the safety country (grid code) and are required by the grid operator: in Italy the CEI 0-21 values must not be changed by the user. The portal contains no commands to write them.">?</button></h2>
-    <p class="muted small">Read only when you press the button.</p>
-    <button id="read-protection" class="secondary">Read protection parameters</button>
-    <div class="cols">
-      <div id="protection" class="rows"></div>
-      <div id="connect" class="rows"></div>
+    <div class="sec-head">
+      <h2>Grid interface protection <span id="safety-badge" class="badge lock">read-only</span>
+        <button type="button" class="help" aria-label="Explain" data-help="Interface protection decides when the inverter must disconnect from the grid (voltage or frequency out of range for too long) and when it may reconnect, plus reactive-power and ride-through behaviour. These values come from the grid code (in Italy, CEI 0-21) and are required by the grid operator. They are read-only by default; editing can be unlocked for a qualified installer.">?</button></h2>
+      <label class="switch danger-switch" title="Unlock editing of the protection parameters">
+        <input type="checkbox" id="safety-unlock"> <span>Enable editing</span>
+      </label>
     </div>
+    <p class="muted small">Read only when you press the button. Editing is for a qualified installer only.</p>
+    <button id="read-protection" class="secondary">Read protection parameters</button>
+    <div id="safety-tabs" class="tabs hidden"></div>
+    <div id="safety-body" class="cols2"></div>
   </section>
 
   <section class="card" id="sec-log">
@@ -86,6 +89,22 @@
 </main>
 
 <div id="tip" class="tip hidden" role="tooltip"></div>
+
+<dialog id="unlock-dlg">
+  <form method="dialog">
+    <h3>Enable editing of protection parameters</h3>
+    <p class="warn danger-note">These are grid interface protection settings (CEI 0-21 and similar).
+      Changing them can make the system non-compliant with grid rules and can be unsafe. In most countries
+      only a qualified, authorised installer may change them, and the installer is responsible for restoring
+      compliant values. Do not change them unless you know exactly what you are doing.</p>
+    <p>Type <b>I UNDERSTAND</b> to enable editing for this session:</p>
+    <input id="unlock-input" type="text" autocomplete="off" aria-label="Type I UNDERSTAND" placeholder="I UNDERSTAND">
+    <div class="row end">
+      <button value="cancel" class="secondary">Cancel</button>
+      <button id="unlock-go" value="go" class="danger" disabled>Enable editing</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="confirm">
   <form method="dialog">

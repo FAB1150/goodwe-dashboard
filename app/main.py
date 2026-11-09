@@ -25,6 +25,8 @@ from pydantic import BaseModel, Field as PField
 
 from . import es
 from . import protocol as p
+from . import safety
+from . import safety_catalog as safety_cat
 from .store import Store
 from .transport import Exchange, InverterUnreachable, UdpClient, WriteNotAllowed, dry_run_exchange
 
@@ -142,14 +144,9 @@ def _view() -> dict[str, Any]:
         out["soc_protect_on"] = es.soc_protect_on(s)
     if "eco" in state.raw:
         out["eco"] = [g.as_dict() for g in es.parse_eco_groups(state.raw["eco"])]
-    if "protection" in state.raw:
-        out["protection"] = [
-            f.as_dict() for f in es.parse_register_block(es.PROTECTION_BLOCK[0], state.raw["protection"], es.PROTECTION_FIELDS)
-        ]
-    if "connect" in state.raw:
-        out["connect"] = [
-            f.as_dict() for f in es.parse_register_block(es.CONNECT_BLOCK[0], state.raw["connect"], es.CONNECT_FIELDS)
-        ]
+    safety_blocks = {k: v for k, v in state.raw.items() if k.startswith("safety_")}
+    if safety_blocks:
+        out["safety"] = safety.fields(safety_blocks)
     return out
 
 
@@ -200,9 +197,9 @@ async def read_all() -> JSONResponse:
 
 @app.post("/api/read/protection")
 async def read_protection() -> JSONResponse:
-    """Grid protection parameters: read only on request, never written."""
+    """Grid interface protection parameters: read only on request."""
     trace: list[Exchange] = []
-    steps = es.protection_read_steps()
+    steps = safety.block_read_steps()
     errors = await _read([s.key for s in steps], steps, trace)
     return JSONResponse({"data": _view(), "errors": errors, "exchanges": _exchanges(trace)})
 
@@ -217,6 +214,7 @@ class PlanIn(BaseModel):
     value: Any = None
     group: dict | None = None
     groups: list[dict] | None = None
+    unlock: str | None = None  # must equal safety.UNLOCK_PHRASE to build a safety write
 
 
 def _group_from(g: dict) -> es.EcoGroup:
@@ -263,6 +261,14 @@ def _build_plan(req: PlanIn) -> es.WritePlan:
             return es.plan_detection_mode(s, int(req.value))
         if st == "overload_reset":
             return es.plan_overload_reset()
+        if st == "dred":
+            dred = int.from_bytes(state.raw["dred"], "big") if len(state.raw.get("dred", b"")) == 2 else None
+            return es.plan_dred(dred, bool(req.value))
+        if st.startswith("safety:"):
+            if (req.unlock or "") != safety.UNLOCK_PHRASE:
+                raise HTTPException(403, "Safety editing is locked. Unlock it before changing a protection parameter.")
+            reg = int(st.split(":", 1)[1], 16)
+            return safety.plan_safety(reg, req.value)
         if st == "eco_schedule":
             return es.plan_eco_schedule(groups, [_group_from(g) for g in (req.groups or [])])
         if st == "eco_group":
@@ -278,11 +284,21 @@ def _build_plan(req: PlanIn) -> es.WritePlan:
 @app.post("/api/prepare")
 async def prepare(req: PlanIn) -> dict:
     """Prepare a change: return the frames that would be sent, to be confirmed."""
-    needed = ["settings", "eco"] if req.setting.startswith("eco") else ["settings"]
-    if req.setting == "offgrid_dod":
-        needed = ["offgrid_dod"]
     state.get_client()
-    await _ensure_fresh(needed)
+    if req.setting.startswith("safety:"):
+        # the safety block must already have been read via "Read protection parameters"
+        reg = int(req.setting.split(":", 1)[1], 16)
+        block = next((f"safety_{k}" for k, start, count in safety_cat.BLOCKS if start <= reg < start + count), None)
+        if block not in state.raw:
+            raise HTTPException(400, "Read the protection parameters first.")
+    elif req.setting == "dred":
+        if "dred" not in state.raw:
+            raise HTTPException(400, "Read from the inverter first.")
+    else:
+        needed = ["settings", "eco"] if req.setting.startswith("eco") else ["settings"]
+        if req.setting == "offgrid_dod":
+            needed = ["offgrid_dod"]
+        await _ensure_fresh(needed)
     plan = _build_plan(req)
     frames = []
     for step in plan.steps:
@@ -337,7 +353,8 @@ async def execute(req: ExecuteIn) -> dict:
                 outcome = "error"
                 message = str(e)
                 break
-            if step.must_ack and not resp.is_ack:
+            acked = resp.is_ack if isinstance(resp, p.Aa55Response) else True
+            if step.must_ack and not acked:
                 outcome = "rejected"
                 message = f"The inverter did not acknowledge '{step.description}' (reply {resp.data.hex(' ').upper()})."
                 break
@@ -347,7 +364,7 @@ async def execute(req: ExecuteIn) -> dict:
         for k in plan.verify:
             state.read_at.pop(k, None)
         verify_trace: list[Exchange] = []
-        errors = await _read(plan.verify, es.page_read_steps(), verify_trace)
+        errors = await _read(plan.verify, es.page_read_steps() + safety.block_read_steps(), verify_trace)
         trace.extend(verify_trace)
         view = _view()
         reread = _extract(plan.setting, view)
@@ -376,6 +393,10 @@ def _extract(setting: str, view: dict) -> Any:
         if g and setting.endswith("_switch"):
             return "enabled" if g["enabled"] else "disabled"
         return g
+    if setting.startswith("safety:"):
+        reg = int(setting.split(":", 1)[1], 16)
+        blocks = {k: v for k, v in state.raw.items() if k.startswith("safety_")}
+        return safety.reread_value(reg, blocks)
     for fields in view.get("settings", {}).values():
         for f in fields:
             if f["key"] == setting:

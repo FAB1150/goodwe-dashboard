@@ -59,13 +59,26 @@ ALLOWED_REGISTER_RANGES: list[tuple[int, int, str]] = [
 def is_write(req: p.Request) -> bool:
     if isinstance(req, p.ModbusReadRequest):
         return False
+    if isinstance(req, p.ModbusWriteRequest):
+        return True
     return req.ctrl in (0x02, 0x03)
+
+
+def _allowed_modbus_write_registers() -> set[int]:
+    # DRED (0xB7BC) plus every writable grid-protection register. Imported lazily to avoid any
+    # import-order issues; the set is small and this runs once per write.
+    from . import safety
+    return {0xB7BC} | safety.WRITABLE_REGISTERS
 
 
 def ensure_write_allowed(req: p.Request) -> None:
     """Raise WriteNotAllowed if `req` is a write that is not in the allowlist."""
     if not is_write(req):
         return
+    if isinstance(req, p.ModbusWriteRequest):
+        if req.reg in _allowed_modbus_write_registers():
+            return
+        raise WriteNotAllowed(f"Modbus write to register 0x{req.reg:04X} is not allowed")
     assert isinstance(req, p.Aa55Request)
     if req.ctrl == 0x03:
         if req.src == p.SRC_CLASSIC and req.func in ALLOWED_CLASSIC_WRITES:
@@ -144,6 +157,8 @@ class UdpClient:
         frame = req.to_bytes()
         if isinstance(req, p.ModbusReadRequest):
             validate = lambda raw: p.parse_modbus_read(req, raw)  # noqa: E731
+        elif isinstance(req, p.ModbusWriteRequest):
+            validate = lambda raw: p.parse_modbus_write(req, raw)  # noqa: E731
         else:
             validate = lambda raw: p.check_aa55_reply(req, raw)  # noqa: E731
         ex = Exchange(description=description, request_hex=frame.hex(" ").upper())

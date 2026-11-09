@@ -280,21 +280,53 @@ def test_power_factor_display_like_solargo():
     assert es.power_factor(s) == -0.9
 
 
-def test_power_factor_and_dred_are_read_only():
+def test_power_factor_read_only_and_not_set():
     fields = es.settings_fields(_settings(), offgrid_dod_raw=20, dred=1)
     by_key = {f.key: f for group in fields.values() for f in group}
-    for key in ("power_factor", "dred", "charge_v", "capacity_ah"):
+    for key in ("power_factor", "charge_v", "capacity_ah"):
         assert by_key[key].control is None
-    assert by_key["dred"].value == "on"
+    assert by_key["dred"].value == "on" and by_key["dred"].control["type"] == "switch"
     assert all(f.help for f in by_key.values())
     with pytest.raises(WriteNotAllowed):
         ensure_write_allowed(p.classic_command(0x1F, bytes([90])))  # power factor command stays blocked
+    s = _settings()
+    s["power_factor_raw"] = 0xFFFF
+    pf = {f.key: f for group in es.settings_fields(s).values() for f in group}["power_factor"]
+    assert pf.value == "not set"
 
 
-def test_protection_times_in_seconds_with_help():
-    data = b"".join(v.to_bytes(2, "big") for v in [2645, 10, 1955, 75] + [0] * 13)
-    fields = es.parse_register_block(0xB158, data, es.PROTECTION_FIELDS)
-    assert fields[0].value == 264.5 and fields[0].unit == "V"
-    assert fields[1].value == 0.2 and fields[1].unit == "s"  # 10 periods x 20 ms, as SolarGo shows
-    assert fields[3].value == 1.5
-    assert all(f.help and f.protected for f in fields)
+def test_dred_plan():
+    on = es.plan_dred(0, True)
+    off = es.plan_dred(1, False)
+    assert isinstance(on.steps[0].request, p.ModbusWriteRequest)
+    assert on.steps[0].request.to_bytes().hex().startswith("f706b7bc0001")
+    assert off.steps[0].request.to_bytes().hex().startswith("f706b7bc0000")
+    assert on.warning and not off.warning
+    ensure_write_allowed(on.steps[0].request)
+    ensure_write_allowed(off.steps[0].request)
+
+
+def test_safety_decode_matches_app():
+    from app import safety
+    # raw block for 0xB158.. : OV1=2645 (264.5V), OV1 time=9 (0.18s), UV1=345 (34.5V)
+    data = b"".join(v.to_bytes(2, "big") for v in [2645, 9, 345, 9] + [0] * 13)
+    groups = safety.fields({"safety_protect": data})["groups"]
+    volt = next(g for g in groups if g["key"] == "voltage")["fields"]
+    by = {f["key"]: f for f in volt}
+    assert by["safety_B158"]["value"] == 264.5 and by["safety_B158"]["unit"] == "V"
+    assert by["safety_B159"]["value"] == 0.18 and by["safety_B159"]["edit"] is None  # trip time read-only
+    assert by["safety_B15A"]["value"] == 34.5
+    assert all(f["help"] and f["protected"] for f in volt)
+
+
+def test_safety_write_frame_and_range():
+    from app import safety
+    plan = safety.plan_safety(0xB158, 253)
+    assert plan.steps[0].request.to_bytes().hex().startswith("f706b15809e2")  # 2530 = 0x09E2
+    with pytest.raises(ValueError):
+        safety.plan_safety(0xB158, 400)  # out of range [60,300]
+    with pytest.raises(ValueError):
+        safety.plan_safety(0xB159, 1)  # trip time: read-only
+    # signed per-mille round-trips (e.g. P(U) V4 active, default -800)
+    plan = safety.plan_safety(0xB1A9, -800)
+    assert plan.steps[0].request.value == (-800 & 0xFFFF)

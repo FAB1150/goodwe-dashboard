@@ -128,13 +128,32 @@ frame is blocked before it is sent, and the tests check this.
 
 ## Shown read-only on purpose
 
-- **DRED / Remote Shutdown / RCR** (Modbus register `0xB7BC`, read with `F7 03 B7BC 0001`;
-  SolarGo writes it with `F7 06 B7BC`): an external grid-operator control input.
-- **Power factor** (`031F`, offset 42; SolarGo shows raw / 100, with raw 0–20 meaning a negative
-  factor): reactive power behaviour is part of the grid code.
+- **Power factor** (offset 42 of the 0x0109 block): SolarGo decodes it with a sign-extending read
+  (`byte2ToIntNew`) and only maps raw values 0–20 to a negative factor, then divides by 100. The
+  portal reproduces this exactly and shows `0xFFFF` as "not set".
 - **First cold start (off-grid)**: SolarGo only offers it while the grid is missing.
 - Charge/discharge voltage and current, capacity and battery model: installation parameters set
   by the battery model.
+
+## Grid interface protection ("safety") parameters
+
+Read as five Modbus blocks (same as SolarGo's `get_*` commands): `F7 03 B158 0011`,
+`F7 03 B169 0010`, `F7 03 B179 0042`, `F7 03 B183 0043`, `F7 03 B1D6 000D`. The field list,
+gains, units and ranges come from SolarGo's `CustomSaftyParamEnum` (generated into
+`app/safety_catalog.py`).
+
+Writes (only when the user has unlocked editing) use Modbus write-single, exactly as SolarGo's
+`setCustomSaftyParam`: `F7 06 <reg> <value>` with `value = displayed × gain` as a two's-complement
+16-bit register. **DRED** is the same kind of write: `F7 06 B7BC <1|0>`.
+
+Kept read-only even when unlocked, because SolarGo writes them through a different / non-linear
+path that is firmware-dependent:
+
+- **trip times** (OV/UV/OF/UF stage 1/2/3 times): SolarGo writes these as `value × 1000` to a
+  separate register block via `F7 10 B2xx …` (write-multiple) when the firmware supports it, or
+  `value × 50` to the read register otherwise;
+- **curve time constants** (`reactive_qu`, `active_pu`, `cos_qu`): non-linear encoding
+  (`0.2 / (value + 0.2) × 4096`).
 
 ## Protection parameter units
 
