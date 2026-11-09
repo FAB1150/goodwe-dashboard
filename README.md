@@ -43,6 +43,9 @@ works; if replies never arrive, try `network_mode: host` in the compose file (an
 
 ### Environment variables
 
+Set them in Portainer under **Environment variables** of the stack (or in a `.env` file next to
+`docker-compose.yml`); the defaults below apply when they are not set.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `WRITES_ENABLED` | `false` | With `false` the portal sends **no** writes at all: everything is a dry run. |

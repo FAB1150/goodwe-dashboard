@@ -9,15 +9,16 @@ services:
       - "8080:8080"           # web page: http://<host-ip>:8080
     volumes:
       - goodwe-dashboard-data:/data   # saved IP and change log
+    # Values can be overridden from Portainer ("Environment variables" of the stack).
     environment:
       # Phase 1: read-only. Set to "true" only when you want to try writes.
-      WRITES_ENABLED: "false"
+      WRITES_ENABLED: "${WRITES_ENABLED:-false}"
       # Optional: initial inverter IP (can also be changed from the page)
-      INVERTER_HOST: ""
+      INVERTER_HOST: "${INVERTER_HOST:-}"
       # Optional: simple login (HTTP Basic). Empty = no password.
-      PORTAL_USER: "admin"
-      PORTAL_PASSWORD: ""
-      TZ: "Europe/Rome"
+      PORTAL_USER: "${PORTAL_USER:-admin}"
+      PORTAL_PASSWORD: "${PORTAL_PASSWORD:-}"
+      TZ: "${TZ:-Europe/Rome}"
 
 volumes:
   goodwe-dashboard-data:
