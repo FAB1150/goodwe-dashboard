@@ -40,10 +40,16 @@ async def test_read_all(tmp_path, monkeypatch):
         assert any(f["key"] == "model" and f["value"] == "GW5048-EM" for f in data["device"])
         assert len(data["eco"]) == 4
         assert data["eco"][0]["mode"] == "charge" and data["eco"][0]["enabled"]
-        assert data["offgrid_dod"]["value"] == 20
-        # 4 reads, no writes
-        assert len(fake.received) == 4
-        assert all(f[4] == 0x01 for f in fake.received)
+        battery = {f["key"]: f for f in data["settings"]["battery"]}
+        assert battery["offgrid_dod"]["value"] == 20
+        grid = {f["key"]: f for f in data["settings"]["grid"]}
+        assert grid["dred"]["value"] == "off" and grid["dred"]["control"] is None
+        # every field has an explanation
+        for group in data["settings"].values():
+            assert all(f["help"] for f in group)
+        # 5 reads (4 AA55 + 1 Modbus), no writes
+        assert len(fake.received) == 5
+        assert all(f[4] == 0x01 for f in fake.received[:4]) and fake.received[4][:2] == b"\xf7\x03"
     finally:
         await client.aclose()
         transport.close()
@@ -176,6 +182,34 @@ async def test_eco_schedule_save_and_reread(tmp_path, monkeypatch):
         bad = [{"index": 3, "start": "03:00", "end": "04:00", "mode": "discharge", "power_abs": 20, "days": 127, "enabled": True}]
         r = await client.post("/api/prepare", json={"setting": "eco_schedule", "groups": bad})
         assert r.status_code == 400 and "opposite" in r.json()["detail"]
+    finally:
+        await client.aclose()
+        transport.close()
+
+
+@pytest.mark.anyio
+async def test_advanced_switches_write_and_reread(tmp_path, monkeypatch):
+    main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=True)
+    try:
+        await client.post("/api/read")
+        cases = [
+            ("shadow_scan", True, "on"),
+            ("backup_supply", False, "off"),
+            ("export_limit_enabled", False, "off"),
+            ("battery_activated", True, "on"),
+            ("detection_mode", 1, "UPS mode – half wave detection"),
+        ]
+        for setting, value, expected in cases:
+            plan = (await client.post("/api/prepare", json={"setting": setting, "value": value})).json()
+            r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
+            assert r["outcome"] == "ok", (setting, r)
+            assert r["reread"] == expected
+        plan = (await client.post("/api/prepare", json={"setting": "overload_reset"})).json()
+        r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
+        assert r["outcome"] == "ok"
+        for blocked in ("power_factor", "dred", "safety_country"):
+            r = await client.post("/api/prepare", json={"setting": blocked, "value": 1})
+            assert r.status_code == 400
     finally:
         await client.aclose()
         transport.close()

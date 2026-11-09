@@ -129,16 +129,19 @@ def _view() -> dict[str, Any]:
             "" if info.family_ok else
             f"Serial number {info.serial!r} does not look like an ES/EM: the portal's commands are meant for that family."
         )
+    offgrid_raw = None
+    if "offgrid_dod" in state.raw and len(state.raw["offgrid_dod"]) == 2:
+        offgrid_raw = int.from_bytes(state.raw["offgrid_dod"], "big")
+    dred = int.from_bytes(state.raw["dred"], "big") if len(state.raw.get("dred", b"")) == 2 else None
     if "settings" in state.raw:
         s = es.parse_settings(state.raw["settings"])
-        out["settings"] = {k: [f.as_dict() for f in v] for k, v in es.settings_fields(s).items()}
+        out["settings"] = {
+            k: [f.as_dict() for f in v] for k, v in es.settings_fields(s, offgrid_raw, dred).items()
+        }
         out["work_mode"] = s.get("work_mode")
         out["soc_protect_on"] = es.soc_protect_on(s)
     if "eco" in state.raw:
         out["eco"] = [g.as_dict() for g in es.parse_eco_groups(state.raw["eco"])]
-    if "offgrid_dod" in state.raw and len(state.raw["offgrid_dod"]) == 2:
-        raw = int.from_bytes(state.raw["offgrid_dod"], "big")
-        out["offgrid_dod"] = {"value": 100 - raw, "raw": raw}
     if "protection" in state.raw:
         out["protection"] = [
             f.as_dict() for f in es.parse_register_block(es.PROTECTION_BLOCK[0], state.raw["protection"], es.PROTECTION_FIELDS)
@@ -248,6 +251,18 @@ def _build_plan(req: PlanIn) -> es.WritePlan:
             return es.plan_offgrid_dod(cur, int(req.value))
         if st == "export_limit_w":
             return es.plan_export_limit(s, int(req.value))
+        if st == "export_limit_enabled":
+            return es.plan_export_limit_enabled(s, bool(req.value))
+        if st == "shadow_scan":
+            return es.plan_shadow_scan(s, bool(req.value))
+        if st == "backup_supply":
+            return es.plan_backup_supply(s, bool(req.value))
+        if st == "battery_activated":
+            return es.plan_battery_activated(s, bool(req.value))
+        if st == "detection_mode":
+            return es.plan_detection_mode(s, int(req.value))
+        if st == "overload_reset":
+            return es.plan_overload_reset()
         if st == "eco_schedule":
             return es.plan_eco_schedule(groups, [_group_from(g) for g in (req.groups or [])])
         if st == "eco_group":
@@ -327,7 +342,7 @@ async def execute(req: ExecuteIn) -> dict:
                 message = f"The inverter did not acknowledge '{step.description}' (reply {resp.data.hex(' ').upper()})."
                 break
     reread: Any = None
-    if not dry:
+    if not dry and plan.verify:
         await asyncio.sleep(0.5)
         for k in plan.verify:
             state.read_at.pop(k, None)
@@ -352,17 +367,6 @@ async def execute(req: ExecuteIn) -> dict:
 
 
 def _extract(setting: str, view: dict) -> Any:
-    if setting == "work_mode":
-        return es.WORK_MODES.get(view.get("work_mode"), view.get("work_mode"))
-    if setting == "soc_protect":
-        return "on" if view.get("soc_protect_on") else "off"
-    if setting in ("ongrid_dod", "export_limit_w"):
-        for fields in view.get("settings", {}).values():
-            for f in fields:
-                if f["key"] == setting:
-                    return f["value"]
-    if setting == "offgrid_dod":
-        return (view.get("offgrid_dod") or {}).get("value")
     if setting == "eco_schedule":
         return view.get("eco")
     if setting.startswith("eco_group_"):
@@ -372,6 +376,10 @@ def _extract(setting: str, view: dict) -> Any:
         if g and setting.endswith("_switch"):
             return "enabled" if g["enabled"] else "disabled"
         return g
+    for fields in view.get("settings", {}).values():
+        for f in fields:
+            if f["key"] == setting:
+                return f["value"]
     return None
 
 

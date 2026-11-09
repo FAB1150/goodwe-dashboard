@@ -40,6 +40,12 @@ ALLOWED_CLASSIC_WRITES: dict[int, str] = {
     0x2D: "discharge window (legacy mode)",
     0x3B: "SoC protection",
     0x35: "grid export limit",
+    0x53: "export limit on/off",
+    0x28: "shadow scan",
+    0x27: "backup output (relay control)",
+    0x37: "battery activation",
+    0x5B: "backup detection mode",
+    0x5E: "clear backup overload history",
 }
 # Registers writable with 0x0239 (source B0): (start, end inclusive, description)
 ALLOWED_REGISTER_RANGES: list[tuple[int, int, str]] = [

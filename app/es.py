@@ -31,6 +31,7 @@ ECO_REGS_PER_GROUP = 4
 REG_ONGRID_DOD = 0x0560
 REG_OFFGRID_DOD = 0x05A1
 REG_CLEAR_BATTERY_MODE = 0x0700
+REG_DRED = 0xB7BC  # read-only
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +53,15 @@ def _s16(b: bytes, off: int) -> int:
 
 @dataclass
 class Field:
-    """A value shown in the page."""
+    """A value shown in the page.
+
+    `help` is the explanation shown by the "?" icon; `control` describes how the page lets
+    the user change the value (None = read-only):
+      {"type": "switch", "setting": ..., "on": bool, "warning": str}
+      {"type": "number", "setting": ..., "min": .., "max": .., "step": ..}
+      {"type": "select", "setting": ..., "options": [[value, label], ...], "current": value}
+      {"type": "action", "setting": ..., "button": str, "warning": str}
+    """
 
     key: str
     label: str
@@ -60,7 +69,8 @@ class Field:
     unit: str = ""
     raw: Any = None
     note: str = ""
-    editable: bool = False
+    help: str = ""
+    control: dict | None = None
     protected: bool = False  # grid protection parameter: always read-only
 
     def as_dict(self) -> dict:
@@ -130,21 +140,32 @@ def parse_device_info(data: bytes) -> DeviceInfo:
 
 def device_info_fields(info: DeviceInfo) -> list[Field]:
     return [
-        Field("model", "Model", info.model),
-        Field("serial", "Serial number", info.serial),
-        Field("firmware", "Firmware", info.firmware),
-        Field("software", "Software version", info.software),
-        Field("arm_string", "ARM version (extended)", info.arm_string or "—"),
-        Field("dsp_version", "DSP version (from firmware)", info.dsp_version),
-        Field("arm_version", "ARM version as used by SolarGo", info.arm_version),
+        Field("model", "Model", info.model, help="Model name reported by the inverter."),
+        Field("serial", "Serial number", info.serial,
+              help="Serial number. The letters EMU, ESU, ESA or BPS identify the ES family (\"platform 105\") "
+                   "that this portal's commands are written for."),
+        Field("firmware", "Firmware", info.firmware,
+              help="Firmware code. The first two digits are the DSP version; the fifth character is the ARM "
+                   "version in base 36 (A = 10, B = 11, …)."),
+        Field("software", "Software version", info.software, help="ARM software version string."),
+        Field("arm_string", "ARM version (extended)", info.arm_string or "—",
+              help="Extended ARM version, e.g. 410-04000-11. The last number is the ARM version: SolarGo uses it "
+                   "to decide which settings to show (e.g. eco windows with target SoC need ARM 14 or later)."),
+        Field("dsp_version", "DSP version (from firmware)", info.dsp_version,
+              help="Version of the DSP, the processor that runs the power conversion and grid protection."),
+        Field("arm_version", "ARM version as used by SolarGo", info.arm_version,
+              help="Version of the ARM processor firmware, which handles communication and settings."),
         Field(
             "safety_country",
             "Safety country",
             info.safety_country,
             raw=info.safety_country_code,
             protected=True,
-            note="Grid interface parameter: read-only. Byte 63 of the 0x0182 response, as in SolarGo; "
-            "on some firmware this byte does not hold the country (e.g. 32 = space).",
+            note="Byte 63 of the 0x0182 response, as in SolarGo; on some firmware this byte does not hold the "
+                 "country (e.g. 32 = space).",
+            help="The grid code the inverter follows (for a low-voltage connection in Italy: CEI 0-21). It loads "
+                 "the whole set of grid protection thresholds and trip times shown at the bottom of the page. "
+                 "Read-only: in Italy it must not be changed by the user.",
         ),
     ]
 
@@ -204,59 +225,169 @@ def ongrid_dod(settings: dict) -> int:
     return 100 - settings["min_soc_raw"]
 
 
-def settings_fields(s: dict) -> dict[str, list[Field]]:
+DETECTION_MODES = {
+    0: "UPS mode – full wave detection",
+    1: "UPS mode – half wave detection",
+    2: "EPS mode – supports LVRT",
+}
+
+
+def _onoff(v: bool) -> str:
+    return "on" if v else "off"
+
+
+def battery_activated_on(settings: dict) -> bool:
+    return settings["battery_activated"] > 0
+
+
+def power_factor(settings: dict) -> float:
+    raw = settings["power_factor_raw"]
+    value = raw - 100 if 0 <= raw <= 20 else raw  # SolarGo: 0..20 means a negative factor
+    return value / 100
+
+
+def settings_fields(s: dict, offgrid_dod_raw: int | None = None, dred: int | None = None) -> dict[str, list[Field]]:
     wm = s.get("work_mode")
-    pf_raw = s["power_factor_raw"]
-    pf = pf_raw - 100 if 0 <= pf_raw <= 20 else pf_raw  # SolarGo's transformation
     discharge_a = min(s["discharge_i_raw"] / 0.128 / 10, 120.0)
     charge_a = s["charge_i_raw"] / 0.266 / 10
-    return {
-        "mode": [
-            Field(
-                "work_mode",
-                "Work mode",
-                WORK_MODES.get(wm, f"unknown ({wm})") if wm is not None else "—",
-                raw=wm,
-                editable=True,
-            ),
-            Field("charge_window", "Charge window (legacy command 0x032C)", s["charge_window"],
-                  note=f"limit {s['charge_power_limit']} %"),
-            Field("discharge_window", "Discharge window (legacy command 0x032D)", s["discharge_window"],
-                  note=f"limit {s['discharge_power_limit']} %"),
-        ],
-        "battery": [
-            Field("soc_protect", "SoC protection", "on" if soc_protect_on(s) else "off",
-                  raw=s["soc_protect_raw"], editable=True,
-                  note="SolarGo only lets you change the on-grid DoD while SoC protection is on."),
-            Field("ongrid_dod", "On-grid depth of discharge (DoD)", ongrid_dod(s), "%",
-                  raw=s["min_soc_raw"], editable=True,
-                  note=f"on-grid minimum SoC = {s['min_soc_raw']} %"),
-            Field("capacity_ah", "Battery capacity", s["capacity_ah"], "Ah"),
-            Field("charge_v", "Charge voltage", s["charge_v_raw"] / 10, "V", raw=s["charge_v_raw"]),
-            Field("charge_i", "Charge current (SolarGo conversion)", round(charge_a, 1), "A",
-                  raw=s["charge_i_raw"]),
-            Field("discharge_v", "Discharge voltage", s["discharge_v_raw"] / 10, "V", raw=s["discharge_v_raw"]),
-            Field("discharge_i", "Discharge current (SolarGo conversion)", round(discharge_a, 1), "A",
-                  raw=s["discharge_i_raw"]),
-            Field("battery_model", "Battery model (255 = custom)", s["battery_model"]),
-            Field("battery_activated", "Battery activation", s["battery_activated"]),
-            Field("offgrid_charge", "Grid charging in off-grid mode", s["offgrid_charge"]),
-        ],
-        "grid": [
-            Field("export_limit_w", "Grid export limit", s["export_limit_w"], "W", editable=True),
-            Field("export_limit_enabled", "Export limitation (read state)",
-                  "on" if s["export_limit_enabled_raw"] == 1 else "off",
-                  raw=s["export_limit_enabled_raw"],
-                  note="The switch cannot be changed from the portal yet (polarity to be verified)."),
-            Field("backup_supply", "Backup output (EPS)", "on" if s["backup_supply"] else "off",
-                  raw=s["backup_supply"]),
-            Field("power_factor", "Power factor", pf, raw=pf_raw),
-            Field("shadow_scan", "Shadow scan (MPPT)", "on" if s["shadow_scan"] else "off",
-                  raw=s["shadow_scan"]),
-            Field("grid_quality_check", "Grid quality check", s.get("grid_quality_check"),
-                  raw=s.get("grid_quality_check")),
-        ],
-    }
+    gq = s.get("grid_quality_check")
+
+    mode = [
+        Field(
+            "work_mode", "Work mode",
+            WORK_MODES.get(wm, f"unknown ({wm})") if wm is not None else "—", raw=wm,
+            control={"type": "select", "setting": "work_mode", "current": wm,
+                     "options": [[m, WORK_MODES[m]] for m in WRITABLE_WORK_MODES]},
+            help="General (self-use): PV covers the house first, the surplus charges the battery, and the battery "
+                 "discharges to cover the house load; the grid is used only for what is missing. "
+                 "Backup: the battery is kept full (SolarGo sets a 00:00–23:59 grid charge window at 10 % power) and "
+                 "is used only when the grid fails. "
+                 "Eco: follows the charge/discharge windows below; outside the windows the inverter works as in "
+                 "General mode. Off-grid is shown but cannot be set from the portal.",
+        ),
+        Field("charge_window", "Charge window (legacy command 0x032C)", s["charge_window"],
+              note=f"limit {s['charge_power_limit']} %",
+              help="Charge window of the older firmware scheme. With this firmware the eco windows are used "
+                   "instead; SolarGo resets it to 00:00–00:00 when switching to General and sets 00:00–23:59 "
+                   "(10 %) for Backup. Shown for reference only."),
+        Field("discharge_window", "Discharge window (legacy command 0x032D)", s["discharge_window"],
+              note=f"limit {s['discharge_power_limit']} %",
+              help="Discharge window of the older firmware scheme, see above. Shown for reference only."),
+    ]
+
+    battery = [
+        Field("soc_protect", "SoC protection", _onoff(soc_protect_on(s)), raw=s["soc_protect_raw"],
+              control={"type": "switch", "setting": "soc_protect", "on": soc_protect_on(s)},
+              help="When on, in on-grid operation the battery stops discharging when it reaches the minimum SoC "
+                   "set by the on-grid DoD below (e.g. DoD 80 % = stops at 20 %). When off, that limit is not "
+                   "applied and the battery is only protected by its own BMS limits; SolarGo then hides the DoD "
+                   "field and does not let you change it."),
+        Field("ongrid_dod", "On-grid depth of discharge (DoD)", ongrid_dod(s), "%", raw=s["min_soc_raw"],
+              note=f"minimum SoC on-grid = {s['min_soc_raw']} %",
+              control={"type": "number", "setting": "ongrid_dod", "min": 0, "max": 95, "step": 1,
+                       "disabled": not soc_protect_on(s),
+                       "disabled_reason": "Turn SoC protection on to change it (as in SolarGo)."},
+              help="How much of the battery can be used while the grid is present. Minimum SoC = 100 − DoD: with "
+                   "DoD 80 % the battery stops discharging at 20 %, keeping 20 % in reserve for outages. Only "
+                   "applied when SoC protection is on."),
+    ]
+    if offgrid_dod_raw is not None:
+        battery.append(
+            Field("offgrid_dod", "Off-grid depth of discharge (DoD)", 100 - offgrid_dod_raw, "%", raw=offgrid_dod_raw,
+                  note=f"minimum SoC off-grid = {offgrid_dod_raw} %",
+                  control={"type": "number", "setting": "offgrid_dod", "min": 0, "max": 95, "step": 1},
+                  help="Same as the on-grid DoD, but used when the grid is down and the backup (EPS) output runs "
+                       "from the battery. It is usually set higher than the on-grid DoD, so that the reserve left "
+                       "by the on-grid limit is available during an outage.")
+        )
+    battery += [
+        Field("battery_activated", "Battery activation", _onoff(battery_activated_on(s)), raw=s["battery_activated"],
+              control={"type": "switch", "setting": "battery_activated", "on": battery_activated_on(s),
+                       "warning": "When on, the battery port outputs about 60 V to wake up the battery. Use it only "
+                                  "for a lithium battery without automatic breaker that has shut down after an "
+                                  "undervoltage protection."},
+              help="Wakes up a lithium battery that switched itself off after an undervoltage protection: the "
+                   "inverter puts about 60 V on the battery port so the BMS can restart. Only for lithium "
+                   "batteries without an automatic breaker. Leave it off in normal operation."),
+        Field("capacity_ah", "Battery capacity", s["capacity_ah"], "Ah",
+              help="Battery capacity configured in the inverter, in ampere-hours (e.g. 7.2 kWh at 48 V ≈ 150 Ah). "
+                   "For lithium batteries it comes from the battery model selected at installation."),
+        Field("charge_v", "Charge voltage", s["charge_v_raw"] / 10, "V", raw=s["charge_v_raw"],
+              help="Maximum charging voltage of the battery. Set by the battery model for lithium batteries "
+                   "(configurable only for lead-acid). Read-only here."),
+        Field("charge_i", "Charge current", round(charge_a, 1), "A", raw=s["charge_i_raw"],
+              help="Maximum charging current. Converted as SolarGo does (raw ÷ 0.266 ÷ 10); the raw value is "
+                   "shown too in case the conversion does not match SolarGo. Read-only here."),
+        Field("discharge_v", "Discharge voltage", s["discharge_v_raw"] / 10, "V", raw=s["discharge_v_raw"],
+              help="Voltage below which the battery is considered empty (cut-off). Set by the battery model for "
+                   "lithium batteries. Read-only here."),
+        Field("discharge_i", "Discharge current", round(discharge_a, 1), "A", raw=s["discharge_i_raw"],
+              help="Maximum discharging current. Converted as SolarGo does (raw ÷ 0.128 ÷ 10, capped at 120 A). "
+                   "Read-only here."),
+        Field("battery_model", "Battery model", s["battery_model"],
+              help="Index of the battery model selected at installation; 255 means custom (self-defined) "
+                   "parameters. Changing it is part of the basic installation settings, not of this portal."),
+        Field("offgrid_charge", "Off-grid charge flag", s["offgrid_charge"],
+              help="Raw flag from the settings block (byte 15) related to charging in off-grid mode. Its exact "
+                   "meaning is not documented; shown for comparison with SolarGo."),
+    ]
+
+    grid: list[Field] = []
+    if dred is not None:
+        grid.append(
+            Field("dred", "DRED / Remote Shutdown / RCR", _onoff(dred == 1), raw=dred, protected=True,
+                  help="Lets an external signal limit or stop the inverter: a demand-response device (DRED), a "
+                       "remote shutdown contact or a ripple-control receiver (RCR) wired to the inverter's DRED "
+                       "port. It is a grid-operator control function, so the portal shows it read-only. SolarGo "
+                       "warns that enabling it on hardware that does not support it can stop the inverter from "
+                       "working normally.")
+        )
+    grid += [
+        Field("export_limit_enabled", "Export limit", _onoff(s["export_limit_enabled_raw"] == 1),
+              raw=s["export_limit_enabled_raw"],
+              control={"type": "switch", "setting": "export_limit_enabled", "on": s["export_limit_enabled_raw"] == 1},
+              help="When on, the inverter reduces its output so that the power sent to the grid does not exceed "
+                   "the export limit value below. It relies on the energy meter / CT: if that is not installed "
+                   "or wired correctly the inverter cannot measure export and the limit does not work."),
+        Field("export_limit_w", "Export limit value", s["export_limit_w"], "W",
+              control={"type": "number", "setting": "export_limit_w", "min": 0, "max": 10000, "step": 10},
+              help="Maximum power sent to the grid when the export limit is on, in watts. 0 = zero export: "
+                   "once the house is covered and the battery is full, extra PV production is curtailed."),
+        Field("shadow_scan", "Shadow scan", _onoff(s["shadow_scan"] == 1), raw=s["shadow_scan"],
+              control={"type": "switch", "setting": "shadow_scan", "on": s["shadow_scan"] == 1},
+              help="About every 60 minutes the inverter sweeps the whole PV voltage range to find the real "
+                   "maximum power point, which can move when panels are partly shaded. Production drops briefly "
+                   "during each scan, so leave it off unless shading is significant."),
+        Field("backup_supply", "Backup output", _onoff(s["backup_supply"] == 1), raw=s["backup_supply"],
+              control={"type": "switch", "setting": "backup_supply", "on": s["backup_supply"] == 1},
+              help="Powers the BACKUP (EPS) port from battery and PV when the grid fails. When off, loads on the "
+                   "backup port lose power during an outage. The detection mode below sets how fast it switches."),
+        Field("detection_mode", "Detection mode", DETECTION_MODES.get(gq, f"unknown ({gq})") if gq is not None else "—",
+              raw=gq,
+              control={"type": "select", "setting": "detection_mode", "current": gq,
+                       "options": [[k, v] for k, v in DETECTION_MODES.items()]} if gq is not None else None,
+              help="How the inverter detects a grid failure to switch the backup output to the battery. "
+                   "UPS full wave: fast detection of both overvoltage and undervoltage, shortest switch-over. "
+                   "UPS half wave: fast detection of undervoltage only. "
+                   "EPS (supports LVRT): fast waveform detection off, so short voltage dips are ridden through "
+                   "instead of switching; switch-over is slower but there are fewer unnecessary switch-overs on a "
+                   "disturbed grid."),
+        Field("cold_start", "First cold start (off-grid)", "only when the grid is missing",
+              help="Starts the inverter from the battery when there is no grid, to power the backup loads (Backup "
+                   "output must be on). SolarGo only offers it while the grid is missing; the portal does not "
+                   "send it."),
+        Field("power_factor", "Power factor", power_factor(s), raw=s["power_factor_raw"], protected=True,
+              help="Fixed power factor (cos φ) of the power fed to the grid: 1 = only active power, lower values "
+                   "make the inverter also exchange reactive power (the sign selects absorbed or supplied). "
+                   "Reactive power behaviour is part of the grid code (CEI 0-21), so it is read-only here."),
+        Field("overload_reset", "Clear overload history", "",
+              control={"type": "action", "setting": "overload_reset", "button": "Clear",
+                       "warning": "Resets the backup overload reconnection time to its default."},
+              help="After repeated overloads of the backup output the inverter waits longer and longer before "
+                   "turning it back on. This resets that waiting time to the default. It does not change any "
+                   "setting."),
+    ]
+    return {"mode": mode, "battery": battery, "grid": grid}
 
 
 # ---------------------------------------------------------------------------
@@ -369,57 +500,92 @@ def eco_conflicts(groups: list[EcoGroup], candidate: EcoGroup) -> list[str]:
 # Grid protection parameters (read-only, Modbus 0xB158.. and 0xB169..)
 # ---------------------------------------------------------------------------
 
-# (register, label, unit, divisor)
+# (register, label, kind) – kind selects unit, scaling and explanation
 PROTECTION_BLOCK = (0xB158, 17)
 PROTECTION_FIELDS = [
-    (0xB158, "Overvoltage stage 1", "V", 10),
-    (0xB159, "Overvoltage stage 1 – time", "periods", 1),
-    (0xB15A, "Undervoltage stage 1", "V", 10),
-    (0xB15B, "Undervoltage stage 1 – time", "periods", 1),
-    (0xB15C, "Overvoltage stage 2", "V", 10),
-    (0xB15D, "Overvoltage stage 2 – time", "periods", 1),
-    (0xB15E, "Undervoltage stage 2", "V", 10),
-    (0xB15F, "Undervoltage stage 2 – time", "periods", 1),
-    (0xB160, "10-minute average overvoltage", "V", 10),
-    (0xB161, "Overfrequency stage 1", "Hz", 100),
-    (0xB162, "Overfrequency stage 1 – time", "periods", 1),
-    (0xB163, "Underfrequency stage 1", "Hz", 100),
-    (0xB164, "Underfrequency stage 1 – time", "periods", 1),
-    (0xB165, "Overfrequency stage 2", "Hz", 100),
-    (0xB166, "Overfrequency stage 2 – time", "periods", 1),
-    (0xB167, "Underfrequency stage 2", "Hz", 100),
-    (0xB168, "Underfrequency stage 2 – time", "periods", 1),
+    (0xB158, "Overvoltage stage 1", "ov"),
+    (0xB159, "Overvoltage stage 1 – trip time", "time"),
+    (0xB15A, "Undervoltage stage 1", "uv"),
+    (0xB15B, "Undervoltage stage 1 – trip time", "time"),
+    (0xB15C, "Overvoltage stage 2", "ov"),
+    (0xB15D, "Overvoltage stage 2 – trip time", "time"),
+    (0xB15E, "Undervoltage stage 2", "uv"),
+    (0xB15F, "Undervoltage stage 2 – trip time", "time"),
+    (0xB160, "10-minute average overvoltage", "ov10"),
+    (0xB161, "Overfrequency stage 1", "of"),
+    (0xB162, "Overfrequency stage 1 – trip time", "time"),
+    (0xB163, "Underfrequency stage 1", "uf"),
+    (0xB164, "Underfrequency stage 1 – trip time", "time"),
+    (0xB165, "Overfrequency stage 2", "of"),
+    (0xB166, "Overfrequency stage 2 – trip time", "time"),
+    (0xB167, "Underfrequency stage 2", "uf"),
+    (0xB168, "Underfrequency stage 2 – trip time", "time"),
 ]
 CONNECT_BLOCK = (0xB169, 16)
 CONNECT_FIELDS = [
-    (0xB169, "Connection voltage – max", "V", 10),
-    (0xB16A, "Connection voltage – min", "V", 10),
-    (0xB16B, "Connection frequency – max", "Hz", 100),
-    (0xB16C, "Connection frequency – min", "Hz", 100),
-    (0xB16D, "Wait time before connecting", "s", 1),
-    (0xB16E, "Reconnection after fault: voltage max", "V", 10),
-    (0xB16F, "Reconnection after fault: voltage min", "V", 10),
-    (0xB170, "Reconnection after fault: frequency max", "Hz", 100),
-    (0xB171, "Reconnection after fault: frequency min", "Hz", 100),
-    (0xB172, "Reconnection after fault: wait time", "s", 1),
-    (0xB173, "Reconnection after frequency fault: wait time", "s", 1),
-    (0xB174, "Power ramp on connection", "", 1),
-    (0xB175, "Power ramp after fault", "", 1),
-    (0xB178, "Connection ramp enabled", "", 1),
+    (0xB169, "Connection voltage – max", "conn_v"),
+    (0xB16A, "Connection voltage – min", "conn_v"),
+    (0xB16B, "Connection frequency – max", "conn_f"),
+    (0xB16C, "Connection frequency – min", "conn_f"),
+    (0xB16D, "Wait time before connecting", "conn_wait"),
+    (0xB16E, "Reconnection after a trip: voltage max", "reconn_v"),
+    (0xB16F, "Reconnection after a trip: voltage min", "reconn_v"),
+    (0xB170, "Reconnection after a trip: frequency max", "reconn_f"),
+    (0xB171, "Reconnection after a trip: frequency min", "reconn_f"),
+    (0xB172, "Reconnection after a trip: wait time", "reconn_wait"),
+    (0xB173, "Reconnection after a frequency trip: wait time", "reconn_wait"),
+    (0xB174, "Power ramp on connection", "ramp"),
+    (0xB175, "Power ramp after a trip", "ramp"),
+    (0xB178, "Power ramp enabled", "ramp_en"),
 ]
+
+# kind -> (unit, divisor, explanation)
+_PROTECTION_KINDS: dict[str, tuple[str, float, str]] = {
+    "ov": ("V", 10, "Overvoltage protection: if the grid voltage stays above this value for longer than the "
+                    "matching trip time, the inverter disconnects from the grid. Stage 2 is normally a higher "
+                    "voltage with a shorter time, for faster reaction to larger faults."),
+    "uv": ("V", 10, "Undervoltage protection: if the grid voltage stays below this value for longer than the "
+                    "matching trip time, the inverter disconnects. Stage 2 is normally a lower voltage with a "
+                    "shorter time."),
+    "ov10": ("V", 10, "Slow overvoltage protection: the inverter disconnects if the voltage averaged over 10 "
+                      "minutes exceeds this value. It limits the voltage rise that a PV system causes on the "
+                      "local grid."),
+    "of": ("Hz", 100, "Overfrequency protection: the inverter disconnects if the grid frequency stays above this "
+                      "value for longer than the trip time. Too-high frequency means too much generation on the "
+                      "grid."),
+    "uf": ("Hz", 100, "Underfrequency protection: the inverter disconnects if the grid frequency stays below this "
+                      "value for longer than the trip time."),
+    "time": ("s", 50, "How long the condition above must last before the inverter disconnects. The inverter "
+                      "stores it in grid periods of 20 ms (1/50 s); SolarGo shows it in seconds, as here."),
+    "conn_v": ("V", 10, "At start-up the inverter connects to the grid only if the voltage is inside this range."),
+    "conn_f": ("Hz", 100, "At start-up the inverter connects only if the frequency is inside this range."),
+    "conn_wait": ("s", 1, "How long voltage and frequency must stay inside the connection range before the "
+                          "inverter connects at start-up."),
+    "reconn_v": ("V", 10, "After a protection trip, the inverter reconnects only when the voltage is back inside "
+                          "this range."),
+    "reconn_f": ("Hz", 100, "After a protection trip, the inverter reconnects only when the frequency is back "
+                            "inside this range."),
+    "reconn_wait": ("s", 1, "After a protection trip, how long the grid must be back inside the reconnection "
+                            "range before the inverter reconnects."),
+    "ramp": ("", 1, "How gradually the inverter ramps its output up after connecting, so that many inverters "
+                    "reconnecting together do not cause a step on the grid. Raw value as stored by the inverter."),
+    "ramp_en": ("", 1, "Whether the gradual power ramp above is used (1 = on)."),
+}
 
 
 def parse_register_block(start: int, data: bytes, spec) -> list[Field]:  # noqa: ANN001
     out = []
-    for reg, label, unit, div in spec:
+    for reg, label, kind in spec:
         off = (reg - start) * 2
         if off + 2 > len(data):
             continue
+        unit, div, help_text = _PROTECTION_KINDS[kind]
         raw = _u16(data, off)
-        value = raw / div if div != 1 else raw
+        value = round(raw / div, 3) if div != 1 else raw
         out.append(
             Field(f"reg_{reg:04X}", label, value, unit, raw=raw, protected=True,
-                  note=f"register 0x{reg:04X} — read-only (CEI 0-21)")
+                  note=f"register 0x{reg:04X}",
+                  help=help_text + " Grid interface protection (CEI 0-21): read-only.")
         )
     return out
 
@@ -442,6 +608,7 @@ def page_read_steps() -> list[ReadStep]:
         ReadStep("settings", "Settings (0x0109)", p.read_settings()),
         ReadStep("eco", "Eco groups (registers 0x0701-0x0710)", p.read_registers(ECO_BASE, ECO_GROUPS * ECO_REGS_PER_GROUP)),
         ReadStep("offgrid_dod", "Off-grid DoD (register 0x05A1)", p.read_registers(REG_OFFGRID_DOD, 1)),
+        ReadStep("dred", "DRED / remote shutdown (Modbus 0xB7BC)", p.ModbusReadRequest(REG_DRED, 1)),
     ]
 
 
@@ -693,4 +860,70 @@ def plan_export_limit(settings: dict, watts: int) -> WritePlan:
         after=watts,
         steps=[WriteStep(f"export limit = {watts} W", p.classic_command(0x35, watts.to_bytes(2, "big")))],
         verify=["settings"],
+    )
+
+
+def _switch_plan(setting: str, label: str, before: bool, after: bool, func: int, payload: bytes, desc: str,
+                 warning: str = "") -> WritePlan:
+    return WritePlan(
+        setting=setting,
+        label=label,
+        before=_onoff(before),
+        after=_onoff(after),
+        steps=[WriteStep(desc, p.classic_command(func, payload))],
+        verify=["settings"],
+        warning=warning,
+    )
+
+
+def plan_export_limit_enabled(settings: dict, enabled: bool) -> WritePlan:
+    """Command 0x0353: 01 = export limit on, 00 = off (AdvancedSettingNewActivity, switch_back_flow_limit)."""
+    return _switch_plan("export_limit_enabled", "Export limit", settings["export_limit_enabled_raw"] == 1, enabled,
+                        0x53, bytes([1 if enabled else 0]), f"export limit {_onoff(enabled)}")
+
+
+def plan_shadow_scan(settings: dict, enabled: bool) -> WritePlan:
+    """Command 0x0328: 80 <80 = on / 00 = off> (buildPackage(60))."""
+    return _switch_plan("shadow_scan", "Shadow scan", settings["shadow_scan"] == 1, enabled,
+                        0x28, bytes([0x80, 0x80 if enabled else 0x00]), f"shadow scan {_onoff(enabled)}")
+
+
+def plan_backup_supply(settings: dict, enabled: bool) -> WritePlan:
+    """Command 0x0327 (relay control): 00 <30 = backup on / 10 = off> (buildPackage(51))."""
+    return _switch_plan("backup_supply", "Backup output", settings["backup_supply"] == 1, enabled,
+                        0x27, bytes([0x00, 0x30 if enabled else 0x10]), f"backup output {_onoff(enabled)}",
+                        "" if enabled else "Loads on the backup port will lose power during a grid outage.")
+
+
+def plan_battery_activated(settings: dict, enabled: bool) -> WritePlan:
+    """Command 0x0337: 00 0F = on, 00 00 = off (buildPackage(70))."""
+    return _switch_plan("battery_activated", "Battery activation", battery_activated_on(settings), enabled,
+                        0x37, bytes([0x00, 0x0F if enabled else 0x00]), f"battery activation {_onoff(enabled)}",
+                        "The battery port will output about 60 V to wake up the battery." if enabled else "")
+
+
+def plan_detection_mode(settings: dict, mode: int) -> WritePlan:
+    """Command 0x035B: 0 full wave, 1 half wave, 2 EPS/LVRT (DetectionModeActivity -> buildPackage(76))."""
+    if mode not in DETECTION_MODES:
+        raise ValueError("unknown detection mode")
+    cur = settings.get("grid_quality_check")
+    return WritePlan(
+        setting="detection_mode",
+        label="Detection mode",
+        before=DETECTION_MODES.get(cur, cur),
+        after=DETECTION_MODES[mode],
+        steps=[WriteStep(f"detection mode = {DETECTION_MODES[mode]}", p.classic_command(0x5B, bytes([mode])))],
+        verify=["settings"],
+    )
+
+
+def plan_overload_reset() -> WritePlan:
+    """Command 0x035E 01 0F: clear the backup overload history (buildPackage(206))."""
+    return WritePlan(
+        setting="overload_reset",
+        label="Clear overload history",
+        before=None,
+        after="cleared",
+        steps=[WriteStep("clear overload history", p.classic_command(0x5E, bytes([0x0F])))],
+        verify=[],
     )
