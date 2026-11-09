@@ -39,6 +39,12 @@ class FakeInverter(asyncio.DatagramProtocol):
             self.registers[0xB158 + i] = 2645 + i
         for i in range(16):
             self.registers[0xB169 + i] = 5010 - i
+        # every safety register the portal reads, so the five blocks come back fully
+        from app import safety_catalog as _cat
+        for _key, _start, _count in _cat.BLOCKS:
+            for i in range(_count):
+                self.registers.setdefault(_start + i, 1000 + i)
+        self.registers[0xB7BC] = 0  # DRED off
         self.received: list[bytes] = []
         self.mute_for = mute_for  # number of requests to ignore (simulates a silent WiFi module)
         self.transport = None
@@ -56,6 +62,13 @@ class FakeInverter(asyncio.DatagramProtocol):
         return body + p.checksum16(body)
 
     def handle(self, frame: bytes) -> bytes | None:
+        if frame[0] == p.MODBUS_ADDR and frame[1] == 0x06:
+            reg = int.from_bytes(frame[2:4], "big")
+            val = int.from_bytes(frame[4:6], "big")
+            if not self.reject_ack:
+                self.registers[reg] = val
+            body = frame[0:6]  # echo
+            return p.HEADER + body + p.crc16_modbus(body).to_bytes(2, "little")
         if frame[0] == p.MODBUS_ADDR and frame[1] == 0x03:
             start = int.from_bytes(frame[2:4], "big")
             count = int.from_bytes(frame[4:6], "big")

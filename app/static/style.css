@@ -161,3 +161,18 @@ h2 .help { margin-left: .35rem; }
 @media (max-width: 640px) {
   .srow { grid-template-columns: 1fr; }
 }
+
+/* --- grid protection: tabs, unlock, edit --------------------------------- */
+.sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; justify-content: space-between; }
+.sec-head h2 { margin: 0; }
+.tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0; }
+.tab { padding: .35rem .7rem; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); font-size: .85rem; }
+.tab.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem; }
+.cols2 .srow { border-top: 1px solid var(--line); }
+.srow.editable .sval input { border-color: var(--err-text); }
+.danger-switch input:checked + span, .danger-switch span { color: var(--err-text); }
+.danger-badge { background: var(--err-bg); color: var(--err-text); border-color: transparent; font-weight: 700; }
+.danger-note { border-left: 3px solid var(--err-text); }
+#unlock-dlg input[type=text] { width: 100%; margin: .5rem 0; padding: .5rem; }
+@media (max-width: 760px) { .cols2 { grid-template-columns: 1fr; } }

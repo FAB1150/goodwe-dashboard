@@ -25,8 +25,18 @@ A self-hosted web page to read and change the settings of a **GoodWe ES/EM** hyb
 | Battery | SoC protection, on-grid DoD, off-grid DoD, battery activation |
 | Grid, export and backup | Export limit on/off and value (W), shadow scan, backup output, backup detection mode, clear overload history |
 
-Everything else is shown read-only. Every setting has a **?** button with an explanation of what
-it does (hover with the mouse, tap on a phone), including the grid protection parameters.
+**DRED / Remote Shutdown / RCR** can be toggled too (with a warning before enabling it).
+
+The **grid interface protection parameters** (CEI 0-21: voltage/frequency thresholds and trip
+times, connection, curves, ride-through, PQ) are shown read-only by default, grouped into tabs.
+Editing can be unlocked with a header switch that requires reading a warning and typing
+`I UNDERSTAND`; it stays unlocked only for the current browser session. This is intended for a
+qualified installer — changing these values can make the system non-compliant and is the
+installer's responsibility. Trip times and curve time-constants stay read-only even when
+unlocked (their write path is firmware-dependent); set those from SolarGo.
+
+Every setting has a **?** button with an explanation (hover with the mouse, tap on a phone),
+including all the protection parameters.
 
 ## Install with Portainer (e.g. Raspberry Pi 4)
 

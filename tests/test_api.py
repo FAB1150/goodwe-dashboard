@@ -43,7 +43,7 @@ async def test_read_all(tmp_path, monkeypatch):
         battery = {f["key"]: f for f in data["settings"]["battery"]}
         assert battery["offgrid_dod"]["value"] == 20
         grid = {f["key"]: f for f in data["settings"]["grid"]}
-        assert grid["dred"]["value"] == "off" and grid["dred"]["control"] is None
+        assert grid["dred"]["value"] == "off" and grid["dred"]["control"]["type"] == "switch"
         # every field has an explanation
         for group in data["settings"].values():
             assert all(f["help"] for f in group)
@@ -207,9 +207,59 @@ async def test_advanced_switches_write_and_reread(tmp_path, monkeypatch):
         plan = (await client.post("/api/prepare", json={"setting": "overload_reset"})).json()
         r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
         assert r["outcome"] == "ok"
-        for blocked in ("power_factor", "dred", "safety_country"):
+        for blocked in ("power_factor", "safety_country"):
             r = await client.post("/api/prepare", json={"setting": blocked, "value": 1})
             assert r.status_code == 400
+    finally:
+        await client.aclose()
+        transport.close()
+
+
+@pytest.mark.anyio
+async def test_dred_toggle(tmp_path, monkeypatch):
+    main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=True)
+    try:
+        await client.post("/api/read")
+        plan = (await client.post("/api/prepare", json={"setting": "dred", "value": True})).json()
+        assert "DRED" in plan["label"] and plan["warning"]
+        r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
+        assert r["outcome"] == "ok" and r["reread"] == "on"
+        assert fake.registers[0xB7BC] == 1
+    finally:
+        await client.aclose()
+        transport.close()
+
+
+@pytest.mark.anyio
+async def test_safety_read_and_locked_write(tmp_path, monkeypatch):
+    main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=True)
+    try:
+        r = (await client.post("/api/read/protection")).json()
+        assert r["errors"] == {}
+        groups = r["data"]["safety"]["groups"]
+        keys = [g["key"] for g in groups]
+        assert "voltage" in keys and "connection" in keys and "curves" in keys
+        volt = next(g for g in groups if g["key"] == "voltage")
+        ov1 = next(f for f in volt["fields"] if f["key"] == "safety_B158")
+        assert ov1["value"] == 264.5 and ov1["edit"]["kind"] == "number"
+        # a trip-time is read-only even in the catalogue
+        t1 = next(f for f in volt["fields"] if f["key"] == "safety_B159")
+        assert t1["edit"] is None
+        # without the unlock phrase the write is refused
+        r = await client.post("/api/prepare", json={"setting": "safety:B158", "value": 260})
+        assert r.status_code == 403
+        # with the unlock phrase it works and reads back
+        plan = (await client.post("/api/prepare", json={"setting": "safety:B158", "value": 260,
+                                                        "unlock": "I UNDERSTAND"})).json()
+        assert plan["label"].startswith("[SAFETY]") and plan["warning"]
+        assert plan["frames"][0]["request_hex"].startswith("F7 06 B1 58 0A 28")  # 2600 = 0x0A28
+        r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
+        assert r["outcome"] == "ok" and r["reread"] == "260.0 V"
+        assert fake.registers[0xB158] == 2600
+        # a non-writable safety register cannot be planned even with the phrase
+        r = await client.post("/api/prepare", json={"setting": "safety:B159", "value": 1,
+                                                    "unlock": "I UNDERSTAND"})
+        assert r.status_code == 400
     finally:
         await client.aclose()
         transport.close()
