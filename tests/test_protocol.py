@@ -330,3 +330,14 @@ def test_safety_write_frame_and_range():
     # signed per-mille round-trips (e.g. P(U) V4 active, default -800)
     plan = safety.plan_safety(0xB1A9, -800)
     assert plan.steps[0].request.value == (-800 & 0xFFFF)
+
+
+def test_every_safety_param_has_specific_help():
+    from app import safety
+    from app.safety_help import REG_HELP
+    assert all(p[0] in REG_HELP for p in safety.PARAMS)
+    by = {p[0]: p for p in safety.PARAMS}
+    assert by[0xB1D7][5] == "‰" and by[0xB1DD][6]  # PQ P points: per-mille, load ones signed
+    assert not by[0xB18C][7] and not by[0xB1BB][7]  # bit fields stay read-only
+    with pytest.raises(WriteNotAllowed):
+        ensure_write_allowed(p.ModbusWriteRequest(0xB18C, 1))
