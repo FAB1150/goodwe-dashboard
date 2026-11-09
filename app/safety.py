@@ -19,14 +19,33 @@ from typing import Any
 
 from . import protocol as p
 from . import safety_catalog as cat
+from .safety_help import REG_HELP
 from .es import ReadStep, WritePlan, WriteStep
 
 # Registers the portal is allowed to write (writable catalogue entries). Used by the transport
 # allowlist; a frame is still only ever built by plan_safety(), which requires the unlock token.
-WRITABLE_REGISTERS: set[int] = {p_[0] for p_ in cat.SAFETY_PARAMS if p_[7]}
+# Fixes on top of the generated catalogue (found reviewing it against the app):
+# - PQ "P" points are per-mille of rated power (SolarGo's enum labels them "V" by mistake);
+# - 0xB18C (F(P) configuration) and 0xB1BB (ride-through switch) are bit fields: read-only.
+_PQ_P = {0xB1D7, 0xB1D9, 0xB1DB, 0xB1DD, 0xB1DF, 0xB1E1}
+_READONLY = {0xB18C, 0xB1BB}
+
+
+def _fix(entry: tuple) -> tuple:
+    reg, gkey, label, kind, gain, unit, signed, writable, lo, hi, help_text = entry
+    if reg in _PQ_P:
+        kind, unit = "permille", "‰"
+    if reg in _READONLY:
+        kind, unit, writable = "ratio", "", False
+    return (reg, gkey, label, kind, gain, unit, signed, writable, lo, hi, REG_HELP.get(reg, help_text))
+
+
+PARAMS: list[tuple] = [_fix(e) for e in cat.SAFETY_PARAMS]
+
+WRITABLE_REGISTERS: set[int] = {p_[0] for p_ in PARAMS if p_[7]}
 UNLOCK_PHRASE = "I UNDERSTAND"
 
-_BY_REG: dict[int, tuple] = {p_[0]: p_ for p_ in cat.SAFETY_PARAMS}
+_BY_REG: dict[int, tuple] = {p_[0]: p_ for p_ in PARAMS}
 
 
 def block_read_steps() -> list[ReadStep]:
@@ -76,7 +95,7 @@ def fields(blocks: dict[str, bytes]) -> dict[str, Any]:
     metadata (kind/min/max/reg) when the parameter is writable. The client shows an edit
     control only after the user unlocks editing; writes are enforced server-side."""
     groups: dict[str, list[dict]] = {k: [] for k, _ in cat.GROUPS}
-    for reg, gkey, label, kind, gain, unit, signed, writable, lo, hi, help_text in cat.SAFETY_PARAMS:
+    for reg, gkey, label, kind, gain, unit, signed, writable, lo, hi, help_text in PARAMS:
         raw = _raw_at(blocks, reg)
         if raw is None:
             continue
