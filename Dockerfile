@@ -16,6 +16,8 @@ USER portal
 VOLUME ["/data"]
 EXPOSE 8080
 
-HEALTHCHECK --interval=60s --timeout=5s CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else 1)"
+# Local HTTP check only (no traffic to the inverter). A short interval makes the status
+# switch from "starting" to "healthy" a few seconds after startup.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else 1)"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
