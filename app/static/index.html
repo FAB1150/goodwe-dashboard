@@ -52,12 +52,11 @@
   </section>
 
   <section class="card" id="sec-eco">
-    <h2>Eco groups (scheduled charge / discharge)</h2>
-    <p class="muted small">Four groups, as SolarGo offers for this firmware. Power is a % of the rated power; a group
-      cannot cross midnight (for 22:00–06:00 use two groups). Saving or enabling a group also sets the Eco work
-      mode, as SolarGo does.</p>
-    <div id="timeline" class="timeline" aria-hidden="true"></div>
-    <div id="eco" class="eco-grid"></div>
+    <h2>Charge / discharge windows (eco mode)</h2>
+    <p class="muted small">Up to four windows, as SolarGo offers for this firmware. Power is a % of the rated
+      power; a window cannot cross midnight (for 22:00–06:00 use two windows). Saving also switches the inverter
+      to Eco mode, as SolarGo does.</p>
+    <div id="schedule"></div>
   </section>
 
   <section class="card" id="sec-battery">
@@ -136,6 +135,7 @@
   </form>
 </dialog>
 
+<script src="/static/schedule.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -202,3 +202,46 @@ def test_every_plan_passes_allowlist():
     for plan in plans:
         for step in plan.steps:
             ensure_write_allowed(step.request)
+
+
+# --- Timeline editor: several eco groups in one plan -------------------------
+
+
+def _groups():
+    return [
+        es.EcoGroup(0, "01:00", "05:00", -50, True, 0x7F),
+        es.EcoGroup(1, "17:00", "21:00", 100, False, 0x3E),
+        es.EcoGroup(2, "00:00", "00:00", 0, False, 0),
+        es.EcoGroup(3, "00:00", "00:00", 0, False, 0),
+    ]
+
+
+def test_eco_schedule_writes_only_changed_groups():
+    cur = _groups()
+    moved = es.EcoGroup(0, "02:00", "06:00", -50, True, 0x7F)
+    added = es.EcoGroup(2, "12:00", "14:00", 30, True, 0x41)
+    plan = es.plan_eco_schedule(cur, [moved, added])
+    assert plan.steps[0].request.to_bytes().hex() == "aa55c07f03590103029e"  # eco mode once
+    regs = [int.from_bytes(s.request.payload[0:2], "big") for s in plan.steps[1:]]
+    assert regs == [0x0701, 0x0709]
+    assert plan.steps[2].request.payload[3:] == added.to_bytes()
+
+
+def test_eco_schedule_remove_writes_disabled_group():
+    cur = _groups()
+    removed = es.EcoGroup(0, "01:00", "05:00", -50, False, 0x7F)
+    plan = es.plan_eco_schedule(cur, [removed])
+    assert plan.steps[1].request.payload[3:] == bytes([1, 0, 5, 0, 0xFF, 0xCE, 0x00, 0x7F])
+
+
+def test_eco_schedule_rejects_conflicts_and_noop():
+    cur = _groups()
+    with pytest.raises(ValueError, match="opposite"):
+        es.plan_eco_schedule(cur, [es.EcoGroup(2, "04:00", "06:00", 50, True, 0x01)])
+    with pytest.raises(ValueError, match="no changes"):
+        es.plan_eco_schedule(cur, [cur[0]])
+    with pytest.raises(ValueError):
+        es.plan_eco_schedule(cur, [es.EcoGroup(2, "22:00", "06:00", 50, True, 0x01)])
+    plan = es.plan_eco_schedule(cur, [es.EcoGroup(2, "04:00", "06:00", -50, True, 0x01)])  # same mode+power: ok
+    for step in plan.steps:
+        ensure_write_allowed(step.request)

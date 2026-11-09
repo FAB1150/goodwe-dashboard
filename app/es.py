@@ -555,6 +555,64 @@ def plan_eco_group(groups: list[EcoGroup], new: EcoGroup) -> WritePlan:
     )
 
 
+def eco_schedule_conflicts(groups: list[EcoGroup]) -> list[str]:
+    """Pairwise SolarGo consistency checks over all enabled groups."""
+    problems: list[str] = []
+    enabled = [g for g in groups if g.enabled]
+    for i, a in enumerate(enabled):
+        for b in enabled[i + 1 :]:
+            for msg in eco_conflicts([b], a):
+                problems.append(f"group {a.index + 1} {msg}")
+    return problems
+
+
+def plan_eco_schedule(current: list[EcoGroup], new: list[EcoGroup]) -> WritePlan:
+    """Save several eco groups at once (timeline editor).
+
+    Same frames as SolarGo's BatteryModeActivity: eco work mode (0x0359=3) once, then the
+    4 registers of every group that changed (enable byte included, so a removed window is a
+    group written with enable = 00).
+    """
+    by_index = {g.index: g for g in current}
+    seen: set[int] = set()
+    changed: list[EcoGroup] = []
+    for g in new:
+        if g.index in seen:
+            raise ValueError(f"group {g.index + 1} given twice")
+        seen.add(g.index)
+        validate_eco_group(g)
+        old = by_index.get(g.index)
+        if old is None or old.to_bytes() != g.to_bytes():
+            changed.append(g)
+    if not changed:
+        raise ValueError("no changes to save")
+    final = [g for g in current if g.index not in seen] + list(new)
+    final.sort(key=lambda g: g.index)
+    problems = eco_schedule_conflicts(final)
+    if problems:
+        # SolarGo refuses these combinations: refuse them too instead of just warning
+        raise ValueError("; ".join(problems))
+    steps = [_work_mode_cmd(3)]
+    for g in sorted(changed, key=lambda g: g.index):
+        reg = ECO_BASE + g.index * ECO_REGS_PER_GROUP
+        state = "enabled" if g.enabled else "disabled (removed)"
+        steps.append(
+            WriteStep(
+                f"group {g.index + 1}: {g.start}-{g.end} {g.mode} {abs(g.power)} % {' '.join(g.days_list)}, {state}"
+                f" — registers 0x{reg:04X}-0x{reg + 3:04X}",
+                p.write_registers(reg, g.to_bytes()),
+            )
+        )
+    return WritePlan(
+        setting="eco_schedule",
+        label="Eco schedule",
+        before=[by_index[g.index].as_dict() for g in changed if g.index in by_index],
+        after=[g.as_dict() for g in changed],
+        steps=steps,
+        verify=["eco", "settings"],
+    )
+
+
 def plan_eco_switch(groups: list[EcoGroup], index: int, enabled: bool) -> WritePlan:
     """BatteryModeListActivity: eco work mode + the group's "switch" register (enable byte + days)."""
     g = next(g for g in groups if g.index == index)
