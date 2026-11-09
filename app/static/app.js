@@ -26,7 +26,7 @@ async function api(path, body) {
 }
 
 async function busy(btn, fn) {
-  const all = [...document.querySelectorAll("main button, header button")];
+  const all = [...document.querySelectorAll("main button, header button, main input, main select")];
   const prev = new Map(all.map((b) => [b, b.disabled]));
   all.forEach((b) => (b.disabled = true));
   const old = btn ? btn.textContent : "";
@@ -34,53 +34,124 @@ async function busy(btn, fn) {
   try { return await fn(); }
   catch (e) { banner(e.message); }
   finally {
-    // restore the previous state, unless the button was re-rendered meanwhile
     if (btn) btn.textContent = old;
-    all.forEach((b) => (b.disabled = prev.get(b)));
+    all.forEach((b) => { if (b.isConnected) b.disabled = prev.get(b); });
     Schedule.refreshButtons();
   }
 }
 
-// --- rendering --------------------------------------------------------------
+// --- "?" explanations ---------------------------------------------------------
 
-function renderKV(el, fields) {
-  el.innerHTML = (fields || []).map((f) => {
-    const unit = f.unit ? ` ${esc(f.unit)}` : "";
-    const raw = f.raw !== null && f.raw !== undefined && f.raw !== f.value ? ` <span class="raw">(raw ${esc(f.raw)})</span>` : "";
-    const note = f.note ? `<br><span class="raw">${esc(f.note)}</span>` : "";
-    return `<dt>${esc(f.label)}</dt><dd>${esc(f.value ?? "—")}${unit}${raw}${note}</dd>`;
-  }).join("");
+const tip = $("#tip");
+let tipOwner = null;
+
+function showTip(btn) {
+  tipOwner = btn;
+  tip.textContent = btn.dataset.help;
+  tip.classList.remove("hidden");
+  const r = btn.getBoundingClientRect();
+  const w = Math.min(360, window.innerWidth - 32);
+  tip.style.width = `${w}px`;
+  const left = Math.max(16, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 16));
+  tip.style.left = `${left + window.scrollX}px`;
+  const below = r.bottom + 8;
+  tip.style.top = `${below + window.scrollY}px`;
+  const h = tip.offsetHeight;
+  if (below + h > window.innerHeight && r.top - h - 8 > 0) tip.style.top = `${r.top - h - 8 + window.scrollY}px`;
+  btn.setAttribute("aria-expanded", "true");
 }
 
-function field(group, key) {
-  return ((view.settings || {})[group] || []).find((f) => f.key === key);
+function hideTip() {
+  if (tipOwner) tipOwner.setAttribute("aria-expanded", "false");
+  tipOwner = null;
+  tip.classList.add("hidden");
+}
+
+// hover only for a real mouse: on touch screens the emulated mouse events would close the tip right after a tap
+document.addEventListener("pointerover", (e) => {
+  if (e.pointerType !== "mouse") return;
+  const b = e.target.closest?.(".help"); if (b) showTip(b);
+});
+document.addEventListener("pointerout", (e) => {
+  if (e.pointerType !== "mouse") return;
+  const b = e.target.closest?.(".help"); if (b && b === tipOwner && !b.contains(e.relatedTarget)) hideTip();
+});
+document.addEventListener("focusin", (e) => { if (e.target.classList?.contains("help")) showTip(e.target); });
+document.addEventListener("focusout", (e) => { if (e.target === tipOwner) hideTip(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".help");
+  // a tap also fires "mouseover" just before: always show here, close by tapping elsewhere or Esc
+  if (b) { e.preventDefault(); showTip(b); return; }
+  if (!tip.contains(e.target)) hideTip();
+});
+window.addEventListener("scroll", () => { if (tipOwner && !tipOwner.matches(":focus")) hideTip(); }, { passive: true });
+
+function helpBtn(text) {
+  return text ? `<button type="button" class="help" aria-label="Explain" aria-expanded="false" data-help="${esc(text)}">?</button>` : "";
+}
+
+// --- rows ---------------------------------------------------------------------
+
+function valueText(f) {
+  const unit = f.unit ? ` ${esc(f.unit)}` : "";
+  return `${esc(f.value ?? "—")}${unit}`;
+}
+
+function controlHtml(f) {
+  const c = f.control;
+  const raw = f.raw !== null && f.raw !== undefined && f.raw !== f.value ? `<span class="raw">raw ${esc(f.raw)}</span>` : "";
+  if (!c) {
+    const lock = f.protected && !f.key.startsWith("reg_") ? ` <span class="badge lock">read-only</span>` : "";
+    return `<span class="val">${valueText(f)}</span>${lock}${raw}`;
+  }
+  const dis = c.disabled ? "disabled" : "";
+  const reason = c.disabled && c.disabled_reason ? `<span class="raw">${esc(c.disabled_reason)}</span>` : "";
+  const id = `ctl-${c.setting}`;
+  if (c.type === "switch") {
+    return `<label class="toggle"><input type="checkbox" role="switch" id="${id}" data-setting="${c.setting}" data-kind="switch"
+      ${c.on ? "checked" : ""} ${dis} aria-label="${esc(f.label)}"><span class="track"></span></label>
+      <span class="val">${valueText(f)}</span>${raw}${reason}`;
+  }
+  if (c.type === "number") {
+    return `<span class="inline"><input type="number" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}" value="${esc(f.value)}" ${dis}
+      aria-label="${esc(f.label)}">${f.unit ? `<span>${esc(f.unit)}</span>` : ""}
+      <button type="button" class="primary" data-setting="${c.setting}" data-kind="number" ${dis}>Save</button></span>${raw}${reason}`;
+  }
+  if (c.type === "select") {
+    const opts = c.options.map(([v, l]) => `<option value="${esc(v)}" ${v === c.current ? "selected" : ""}>${esc(l)}</option>`).join("");
+    const unknown = c.options.some(([v]) => v === c.current) ? "" : `<option value="" selected disabled>${esc(f.value)}</option>`;
+    return `<span class="inline"><select id="${id}" aria-label="${esc(f.label)}" ${dis}>${unknown}${opts}</select>
+      <button type="button" class="primary" data-setting="${c.setting}" data-kind="select" ${dis}>Save</button></span>${raw}${reason}`;
+  }
+  if (c.type === "action") {
+    return `<button type="button" class="secondary" data-setting="${c.setting}" data-kind="action">${esc(c.button)}</button>`;
+  }
+  return valueText(f);
+}
+
+function renderRows(el, fields) {
+  el.innerHTML = (fields || []).map((f) => `<div class="srow${f.protected ? " protected" : ""}">
+      <div class="slabel"><span>${esc(f.label)}</span>${helpBtn(f.help)}${f.note ? `<div class="raw">${esc(f.note)}</div>` : ""}</div>
+      <div class="sval">${controlHtml(f)}</div>
+    </div>`).join("");
 }
 
 function render() {
   const d = view;
-  renderKV($("#device"), d.device);
+  hideTip();
+  renderRows($("#device"), d.device);
   const dw = $("#device-warning");
   dw.textContent = d.device_warning || "";
   dw.classList.toggle("hidden", !d.device_warning);
-
   if (d.settings) {
-    const wm = d.work_mode;
-    const sel = $("#work-mode");
-    if ([0, 2, 3].includes(wm)) sel.value = String(wm);
-    $("#work-mode-current").textContent = `Current: ${field("mode", "work_mode").value}`;
-    renderKV($("#mode-extra"), d.settings.mode.filter((f) => f.key !== "work_mode"));
-    $("#soc-protect").value = d.soc_protect_on ? "1" : "0";
-    const dod = field("battery", "ongrid_dod");
-    $("#ongrid-dod").value = dod.value;
-    $("#ongrid-dod-hint").textContent = d.soc_protect_on ? `minimum SoC ${dod.raw} %` : "Turn SoC protection on to change it";
-    renderKV($("#battery-extra"), d.settings.battery.filter((f) => !["soc_protect", "ongrid_dod"].includes(f.key)));
-    $("#export-limit").value = field("grid", "export_limit_w").value;
-    renderKV($("#grid-extra"), d.settings.grid.filter((f) => f.key !== "export_limit_w"));
+    renderRows($("#mode"), d.settings.mode);
+    renderRows($("#battery"), d.settings.battery);
+    renderRows($("#grid"), d.settings.grid);
   }
-  if (d.offgrid_dod) $("#offgrid-dod").value = d.offgrid_dod.value;
   if (d.eco) Schedule.load(d.eco);
-  if (d.protection) renderKV($("#protection"), d.protection);
-  if (d.connect) renderKV($("#connect"), d.connect);
+  if (d.protection) renderRows($("#protection"), d.protection);
+  if (d.connect) renderRows($("#connect"), d.connect);
 
   const times = Object.values(d.read_at || {});
   if (times.length) {
@@ -117,7 +188,7 @@ async function loadLog() {
     || `<tr><td colspan="6" class="muted">No changes logged yet.</td></tr>`;
 }
 
-// --- actions ----------------------------------------------------------------
+// --- actions ------------------------------------------------------------------
 
 async function readAll(btn) {
   if (btn && Schedule.hasChanges() && !confirm("Discard the unsaved changes to the charge/discharge windows?")) return;
@@ -131,6 +202,7 @@ async function readAll(btn) {
 }
 
 async function save(setting, payload, btn) {
+  let applied = false;
   await busy(btn, async () => {
     banner("");
     const plan = await api("/api/prepare", { setting, ...payload });
@@ -151,22 +223,36 @@ async function save(setting, payload, btn) {
     const choice = await new Promise((res) => dlg.addEventListener("close", () => res(dlg.returnValue), { once: true }));
     if (choice !== "go") return;
     const r = await api("/api/execute", { id: plan.id, dry_run: dry });
+    applied = !dry;
     view = r.data; render(); renderExchanges(r.exchanges);
     const ok = r.outcome === "ok" || r.outcome === "dry run";
     banner(`${plan.label}: ${r.outcome}${r.reread !== null && r.reread !== undefined ? ` — value read back: ${fmt(r.reread)}` : ""}${r.message ? `\n${r.message}` : ""}`, ok);
     loadLog().catch(() => {});
   });
+  // cancelled, dry run or error: put switches and fields back to the values read from the inverter
+  if (!applied && setting !== "eco_schedule") render();
 }
 
-document.addEventListener("click", (ev) => {
+document.addEventListener("change", (ev) => {
   const t = ev.target;
-  if (!(t instanceof HTMLButtonElement)) return;
-  const s = t.dataset.save;
-  if (s === "work_mode") save(s, { value: Number($("#work-mode").value) }, t);
-  else if (s === "soc_protect") save(s, { value: $("#soc-protect").value === "1" }, t);
-  else if (s === "ongrid_dod") save(s, { value: Number($("#ongrid-dod").value) }, t);
-  else if (s === "offgrid_dod") save(s, { value: Number($("#offgrid-dod").value) }, t);
-  else if (s === "export_limit_w") save(s, { value: Number($("#export-limit").value) }, t);
+  if (t.dataset?.kind === "switch") save(t.dataset.setting, { value: t.checked }, null);
+});
+
+document.addEventListener("click", (ev) => {
+  const t = ev.target.closest("button[data-kind]");
+  if (!t) return;
+  const setting = t.dataset.setting;
+  if (t.dataset.kind === "number") {
+    const v = $(`#ctl-${setting}`).value;
+    if (v === "") { banner("Enter a value first."); return; }
+    save(setting, { value: Number(v) }, t);
+  } else if (t.dataset.kind === "select") {
+    const v = $(`#ctl-${setting}`).value;
+    if (v === "") { banner("Choose a value first."); return; }
+    save(setting, { value: Number(v) }, t);
+  } else if (t.dataset.kind === "action") {
+    save(setting, {}, t);
+  }
 });
 
 Schedule.init($("#schedule"), (groups, btn) => save("eco_schedule", { groups }, btn), (msg) => banner(msg));
@@ -183,7 +269,7 @@ $("#load-log").addEventListener("click", (e) => busy(e.currentTarget, loadLog));
 $("#cfg").addEventListener("submit", (e) => {
   e.preventDefault();
   busy(e.submitter, async () => {
-    config = await api("/api/config", { host: $("#host").value.trim(), port: Number($("#port").value) || 8899 });
+    config = { ...config, ...(await api("/api/config", { host: $("#host").value.trim(), port: Number($("#port").value) || 8899 })) };
     banner(`IP saved: ${config.host}`, true);
     await readAll(null);
   });

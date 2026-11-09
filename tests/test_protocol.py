@@ -245,3 +245,56 @@ def test_eco_schedule_rejects_conflicts_and_noop():
     plan = es.plan_eco_schedule(cur, [es.EcoGroup(2, "04:00", "06:00", -50, True, 0x01)])  # same mode+power: ok
     for step in plan.steps:
         ensure_write_allowed(step.request)
+
+
+# --- Advanced settings (SolarGo AdvancedSettingNewActivity) -------------------
+
+
+def _settings():
+    return es.parse_settings(p.parse_aa55(sample("GW5048D-ES_settings_data.hex")).data)
+
+
+def test_advanced_switch_frames_like_solargo():
+    s = _settings()
+    def payload(plan):
+        req = plan.steps[0].request
+        assert req.src == p.SRC_CLASSIC and req.ctrl == 0x03
+        ensure_write_allowed(req)
+        return req.func, req.payload
+    assert payload(es.plan_export_limit_enabled(s, True)) == (0x53, bytes([1]))
+    assert payload(es.plan_export_limit_enabled(s, False)) == (0x53, bytes([0]))
+    assert payload(es.plan_shadow_scan(s, True)) == (0x28, bytes([0x80, 0x80]))
+    assert payload(es.plan_shadow_scan(s, False)) == (0x28, bytes([0x80, 0x00]))
+    assert payload(es.plan_backup_supply(s, True)) == (0x27, bytes([0x00, 0x30]))
+    assert payload(es.plan_backup_supply(s, False)) == (0x27, bytes([0x00, 0x10]))
+    assert payload(es.plan_battery_activated(s, True)) == (0x37, bytes([0x00, 0x0F]))
+    assert payload(es.plan_detection_mode(s, 2)) == (0x5B, bytes([2]))
+    assert payload(es.plan_overload_reset()) == (0x5E, bytes([0x0F]))
+
+
+def test_power_factor_display_like_solargo():
+    s = _settings()
+    s["power_factor_raw"] = 90
+    assert es.power_factor(s) == 0.9
+    s["power_factor_raw"] = 10  # SolarGo: 0..20 means negative
+    assert es.power_factor(s) == -0.9
+
+
+def test_power_factor_and_dred_are_read_only():
+    fields = es.settings_fields(_settings(), offgrid_dod_raw=20, dred=1)
+    by_key = {f.key: f for group in fields.values() for f in group}
+    for key in ("power_factor", "dred", "charge_v", "capacity_ah"):
+        assert by_key[key].control is None
+    assert by_key["dred"].value == "on"
+    assert all(f.help for f in by_key.values())
+    with pytest.raises(WriteNotAllowed):
+        ensure_write_allowed(p.classic_command(0x1F, bytes([90])))  # power factor command stays blocked
+
+
+def test_protection_times_in_seconds_with_help():
+    data = b"".join(v.to_bytes(2, "big") for v in [2645, 10, 1955, 75] + [0] * 13)
+    fields = es.parse_register_block(0xB158, data, es.PROTECTION_FIELDS)
+    assert fields[0].value == 264.5 and fields[0].unit == "V"
+    assert fields[1].value == 0.2 and fields[1].unit == "s"  # 10 periods x 20 ms, as SolarGo shows
+    assert fields[3].value == 1.5
+    assert all(f.help and f.protected for f in fields)

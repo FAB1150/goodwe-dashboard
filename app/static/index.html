@@ -33,75 +33,39 @@
   <section class="card" id="sec-device">
     <h2>Inverter</h2>
     <p id="device-warning" class="warn hidden"></p>
-    <dl id="device" class="kv"></dl>
+    <div id="device" class="rows"></div>
   </section>
 
   <section class="card" id="sec-mode">
     <h2>Work mode</h2>
-    <div class="row">
-      <select id="work-mode" aria-label="Work mode">
-        <option value="0">General (self-use)</option>
-        <option value="2">Backup</option>
-        <option value="3">Eco (time schedule)</option>
-      </select>
-      <button class="primary" data-save="work_mode">Save</button>
-      <span id="work-mode-current" class="muted"></span>
-    </div>
-    <p class="muted small">Off-grid mode is shown only: the portal does not set it.</p>
-    <dl id="mode-extra" class="kv"></dl>
+    <div id="mode" class="rows"></div>
   </section>
 
   <section class="card" id="sec-eco">
-    <h2>Charge / discharge windows (eco mode)</h2>
-    <p class="muted small">Up to four windows, as SolarGo offers for this firmware. Power is a % of the rated
-      power; a window cannot cross midnight (for 22:00–06:00 use two windows). Saving also switches the inverter
-      to Eco mode, as SolarGo does.</p>
+    <h2>Charge / discharge windows (eco mode)
+      <button type="button" class="help" aria-label="Explain" data-help="In Eco work mode the inverter follows these windows. A charge window charges the battery (from PV and, if needed, from the grid) at the chosen power, a discharge window discharges it to cover the house load (and, depending on the export limit, the grid) at the chosen power. Power is a percentage of the inverter's rated power. Outside the windows the inverter behaves as in General mode. This firmware has 4 windows, with no target SoC, and a window cannot cross midnight (use two windows for 22:00–06:00). Overlapping windows on the same day must have the same action and power, as SolarGo requires.">?</button></h2>
+    <p class="muted small">Saving also switches the inverter to Eco mode, as SolarGo does.</p>
     <div id="schedule"></div>
   </section>
 
   <section class="card" id="sec-battery">
     <h2>Battery</h2>
-    <div class="form-grid">
-      <label for="soc-protect">SoC protection</label>
-      <div class="row">
-        <select id="soc-protect"><option value="1">on</option><option value="0">off</option></select>
-        <button class="primary" data-save="soc_protect">Save</button>
-      </div>
-      <label for="ongrid-dod">On-grid DoD</label>
-      <div class="row">
-        <input id="ongrid-dod" type="number" min="0" max="95" step="1"><span>%</span>
-        <button class="primary" data-save="ongrid_dod">Save</button>
-        <span class="muted small" id="ongrid-dod-hint"></span>
-      </div>
-      <label for="offgrid-dod">Off-grid DoD</label>
-      <div class="row">
-        <input id="offgrid-dod" type="number" min="0" max="95" step="1"><span>%</span>
-        <button class="primary" data-save="offgrid_dod">Save</button>
-      </div>
-    </div>
-    <details><summary>Other battery values (read-only)</summary><dl id="battery-extra" class="kv"></dl></details>
+    <div id="battery" class="rows"></div>
   </section>
 
   <section class="card" id="sec-grid">
-    <h2>Grid and export</h2>
-    <div class="form-grid">
-      <label for="export-limit">Export limit</label>
-      <div class="row">
-        <input id="export-limit" type="number" min="0" max="10000" step="10"><span>W</span>
-        <button class="primary" data-save="export_limit_w">Save</button>
-      </div>
-    </div>
-    <dl id="grid-extra" class="kv"></dl>
+    <h2>Grid, export and backup</h2>
+    <div id="grid" class="rows"></div>
   </section>
 
   <section class="card" id="sec-protection">
-    <h2>Grid interface protection (CEI 0-21) <span class="badge lock">read-only</span></h2>
-    <p class="muted small">These parameters can only be read: the portal contains no commands to write them.
-      They are read only when you press the button.</p>
+    <h2>Grid interface protection (CEI 0-21) <span class="badge lock">read-only</span>
+      <button type="button" class="help" aria-label="Explain" data-help="Interface protection decides when the inverter must disconnect from the grid (voltage or frequency out of range for too long) and when it may reconnect. The values come from the safety country (grid code) and are required by the grid operator: in Italy the CEI 0-21 values must not be changed by the user. The portal contains no commands to write them.">?</button></h2>
+    <p class="muted small">Read only when you press the button.</p>
     <button id="read-protection" class="secondary">Read protection parameters</button>
     <div class="cols">
-      <dl id="protection" class="kv"></dl>
-      <dl id="connect" class="kv"></dl>
+      <div id="protection" class="rows"></div>
+      <div id="connect" class="rows"></div>
     </div>
   </section>
 
@@ -120,6 +84,8 @@
     </details>
   </section>
 </main>
+
+<div id="tip" class="tip hidden" role="tooltip"></div>
 
 <dialog id="confirm">
   <form method="dialog">

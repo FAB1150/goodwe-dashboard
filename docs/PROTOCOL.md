@@ -97,6 +97,12 @@ Each group is 8 bytes: `start_h start_m end_h end_m power(signed int16) enabled 
 | General mode | `032C 05 00 00 00 00 00`, `032D 05 00 00 00 00 00`, `B07F 0239 05 0700 01 0001`, `0359 01 00`, `0336 01 00` | `ChooseWorkModeActivity`, ARM ≥ 7 |
 | Backup mode | `B07F 0239 05 0700 01 0001`, `0336 01 00`, `032C 05 00 00 17 3B 0A`, `0359 01 02` | `initESEMBackupModeDialog` |
 | Eco mode | `0359 01 03` (then manage the groups) | |
+| Export limit on/off | `C07F 0353 01 <01 on / 00 off>` | `switch_back_flow_limit` → `buildPackage(57)` (the app's variable name is inverted: switch on = `01`, matching the read value 1 at offset 18) |
+| Shadow scan | `C07F 0328 02 80 <80 on / 00 off>` | `buildPackage(60)` |
+| Backup output | `C07F 0327 02 00 <30 on / 10 off>` | `SetBackup` → `SetRelayControl` → `buildPackage(51)` |
+| Battery activation | `C07F 0337 02 00 <0F on / 00 off>` | `buildPackage(70)` |
+| Backup detection mode | `C07F 035B 01 <0 UPS full wave / 1 UPS half wave / 2 EPS, supports LVRT>` | `DetectionModeActivity` → `setDetectionMode` → `buildPackage(76)` |
+| Clear overload history | `C07F 035E 01 0F` | `buildPackage(206)` |
 
 ### Why DoD writes from Home Assistant have no effect
 
@@ -120,9 +126,17 @@ connection parameters, anti-islanding, P(f)/Q(U)/cosφ curves (registers `0x0001
 writes are restricted to an explicit allowlist of commands and registers: any other write
 frame is blocked before it is sent, and the tests check this.
 
-## Not implemented yet (to be decided after real-world tests)
+## Shown read-only on purpose
 
-- Export limitation on/off switch (`0353`): the polarity derived from the decompiled code is
-  ambiguous.
-- Backup output (`0327`), shadow scan (`0328`), power factor (`031F`), battery activation
-  (`0337`), grid quality check (`035B`), charge parameters: read-only for now.
+- **DRED / Remote Shutdown / RCR** (Modbus register `0xB7BC`, read with `F7 03 B7BC 0001`;
+  SolarGo writes it with `F7 06 B7BC`): an external grid-operator control input.
+- **Power factor** (`031F`, offset 42; SolarGo shows raw / 100, with raw 0–20 meaning a negative
+  factor): reactive power behaviour is part of the grid code.
+- **First cold start (off-grid)**: SolarGo only offers it while the grid is missing.
+- Charge/discharge voltage and current, capacity and battery model: installation parameters set
+  by the battery model.
+
+## Protection parameter units
+
+Trip times (`0xB159`, `0xB15B`, …) are stored in grid periods: SolarGo shows them as
+raw × 0.02 s (`ProtectParamFragment`). Voltages are raw / 10 V, frequencies raw / 100 Hz.

@@ -90,6 +90,16 @@ class FakeInverter(asyncio.DatagramProtocol):
                     self.settings[56:58] = bytes([0, data[1]])
                 elif func == 0x35:
                     self.settings[52:54] = data[0:2]
+                elif func == 0x53:
+                    self.settings[18:20] = bytes([0, data[0]])
+                elif func == 0x28:
+                    self.settings[16:18] = bytes([0, 1 if data[1] else 0])
+                elif func == 0x27:
+                    self.settings[12:14] = bytes([0, 1 if data[1] == 0x30 else 0])
+                elif func == 0x37:
+                    self.settings[34:36] = data[0:2]
+                elif func == 0x5B:
+                    self.settings[68:70] = bytes([0, data[0]])
             return self._reply(src, ctrl, func, ack)
         return None
 

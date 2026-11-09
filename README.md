@@ -22,10 +22,11 @@ A self-hosted web page to read and change the settings of a **GoodWe ES/EM** hyb
 |---|---|
 | Work mode | General, Backup, Eco (off-grid is shown only) |
 | Charge/discharge windows (eco groups) | Weekly timeline editor: drag to move/resize, click to set charge/discharge, power % and days, add and remove windows (up to 4); all changes are saved together |
-| Battery | SoC protection, on-grid DoD, off-grid DoD |
-| Grid | Export limit (W) |
+| Battery | SoC protection, on-grid DoD, off-grid DoD, battery activation |
+| Grid, export and backup | Export limit on/off and value (W), shadow scan, backup output, backup detection mode, clear overload history |
 
-Everything else is shown read-only.
+Everything else is shown read-only. Every setting has a **?** button with an explanation of what
+it does (hover with the mouse, tap on a phone), including the grid protection parameters.
 
 ## Install with Portainer (e.g. Raspberry Pi 4)
 
