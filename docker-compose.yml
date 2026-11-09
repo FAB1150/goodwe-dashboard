@@ -1,0 +1,23 @@
+# Stack per Portainer ("Stacks" -> "Add stack" -> "Repository").
+services:
+  portale-goodwe:
+    build: .
+    image: portale-goodwe:latest
+    container_name: portale-goodwe
+    restart: unless-stopped
+    ports:
+      - "8080:8080"           # pagina web: http://<ip-raspberry>:8080
+    volumes:
+      - portale-goodwe-dati:/data   # IP salvato e registro modifiche
+    environment:
+      # Fase 1: sola lettura. Metti "true" solo quando vuoi provare le scritture.
+      WRITES_ENABLED: "false"
+      # Facoltativo: IP iniziale (si può comunque cambiare dalla pagina)
+      INVERTER_HOST: ""
+      # Facoltativo: login semplice (HTTP Basic). Vuoto = nessuna password.
+      PORTAL_USER: "admin"
+      PORTAL_PASSWORD: ""
+      TZ: "Europe/Rome"
+
+volumes:
+  portale-goodwe-dati:
