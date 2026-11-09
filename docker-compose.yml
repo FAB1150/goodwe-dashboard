@@ -3,6 +3,9 @@ services:
   goodwe-dashboard:
     build: .
     image: goodwe-dashboard:latest
+    # The image is built locally from this repository, never pulled from a registry:
+    # without this, "Pull and redeploy" (re-pull image) fails looking for it on Docker Hub.
+    pull_policy: build
     container_name: goodwe-dashboard
     restart: unless-stopped
     ports:
