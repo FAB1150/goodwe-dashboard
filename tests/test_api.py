@@ -156,3 +156,26 @@ def test_no_protection_write_builders():
 
     names = [n for n in dir(es) if n.startswith("plan_")]
     assert not any(k in n for n in names for k in ("protect_param", "safety", "country", "voltage", "frequency", "island"))
+
+
+@pytest.mark.anyio
+async def test_eco_schedule_save_and_reread(tmp_path, monkeypatch):
+    main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=True)
+    try:
+        await client.post("/api/read")
+        groups = [
+            {"index": 0, "start": "02:00", "end": "06:00", "mode": "charge", "power_abs": 50, "days": 127, "enabled": True},
+            {"index": 2, "start": "12:00", "end": "13:00", "mode": "discharge", "power_abs": 20, "days": 1, "enabled": True},
+        ]
+        plan = (await client.post("/api/prepare", json={"setting": "eco_schedule", "groups": groups})).json()
+        assert len(plan["frames"]) == 3
+        r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
+        assert r["outcome"] == "ok", r
+        assert [g["index"] for g in r["reread"]] == [0, 2]
+        assert r["data"]["eco"][0]["start"] == "02:00" and r["data"]["eco"][2]["enabled"]
+        bad = [{"index": 3, "start": "03:00", "end": "04:00", "mode": "discharge", "power_abs": 20, "days": 127, "enabled": True}]
+        r = await client.post("/api/prepare", json={"setting": "eco_schedule", "groups": bad})
+        assert r.status_code == 400 and "opposite" in r.json()["detail"]
+    finally:
+        await client.aclose()
+        transport.close()

@@ -21,7 +21,7 @@ A self-hosted web page to read and change the settings of a **GoodWe ES/EM** hyb
 | Section | Settings |
 |---|---|
 | Work mode | General, Backup, Eco (off-grid is shown only) |
-| Eco groups | 4 groups: times, charge/discharge, power %, days, enable/disable |
+| Charge/discharge windows (eco groups) | Weekly timeline editor: drag to move/resize, click to set charge/discharge, power % and days, add and remove windows (up to 4); all changes are saved together |
 | Battery | SoC protection, on-grid DoD, off-grid DoD |
 | Grid | Export limit (W) |
 

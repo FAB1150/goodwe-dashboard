@@ -213,6 +213,12 @@ class PlanIn(BaseModel):
     setting: str
     value: Any = None
     group: dict | None = None
+    groups: list[dict] | None = None
+
+
+def _group_from(g: dict) -> es.EcoGroup:
+    power = abs(int(g["power_abs"])) * (-1 if g.get("mode") == "charge" else 1)
+    return es.EcoGroup(int(g["index"]), str(g["start"]), str(g["end"]), power, bool(g.get("enabled", True)), int(g["days"]))
 
 
 async def _ensure_fresh(keys: list[str]) -> None:
@@ -242,11 +248,10 @@ def _build_plan(req: PlanIn) -> es.WritePlan:
             return es.plan_offgrid_dod(cur, int(req.value))
         if st == "export_limit_w":
             return es.plan_export_limit(s, int(req.value))
+        if st == "eco_schedule":
+            return es.plan_eco_schedule(groups, [_group_from(g) for g in (req.groups or [])])
         if st == "eco_group":
-            g = req.group or {}
-            power = abs(int(g["power_abs"])) * (-1 if g.get("mode") == "charge" else 1)
-            group = es.EcoGroup(int(g["index"]), str(g["start"]), str(g["end"]), power, bool(g.get("enabled", True)), int(g["days"]))
-            return es.plan_eco_group(groups, group)
+            return es.plan_eco_group(groups, _group_from(req.group or {}))
         if st == "eco_switch":
             g = req.group or {}
             return es.plan_eco_switch(groups, int(g["index"]), bool(g["enabled"]))
@@ -331,6 +336,9 @@ async def execute(req: ExecuteIn) -> dict:
         trace.extend(verify_trace)
         view = _view()
         reread = _extract(plan.setting, view)
+        if isinstance(plan.after, list) and isinstance(reread, list):
+            wanted = {g["index"] for g in plan.after}
+            reread = [g for g in reread if g["index"] in wanted]
         if errors:
             message = (message + " " if message else "") + "Read-back failed: " + "; ".join(errors.values())
             if outcome == "ok":
@@ -355,6 +363,8 @@ def _extract(setting: str, view: dict) -> Any:
                     return f["value"]
     if setting == "offgrid_dod":
         return (view.get("offgrid_dod") or {}).get("value")
+    if setting == "eco_schedule":
+        return view.get("eco")
     if setting.startswith("eco_group_"):
         idx = int(setting.split("_")[2]) - 1
         groups = view.get("eco") or []
@@ -366,6 +376,12 @@ def _extract(setting: str, view: dict) -> Any:
 
 
 def _matches(plan: es.WritePlan, reread: Any) -> bool:
+    keys = ("start", "end", "power", "enabled", "days")
+    if isinstance(plan.after, list) and isinstance(reread, list):
+        by_index = {g["index"]: g for g in reread}
+        return all(
+            g["index"] in by_index and all(g[k] == by_index[g["index"]][k] for k in keys) for g in plan.after
+        )
     if isinstance(plan.after, dict) and isinstance(reread, dict):
         keys = ("start", "end", "power", "enabled", "days")
         return all(plan.after.get(k) == reread.get(k) for k in keys)

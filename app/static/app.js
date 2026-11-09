@@ -1,8 +1,6 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // show Mon..Sun
 let view = {};
 let config = {};
 
@@ -28,13 +26,19 @@ async function api(path, body) {
 }
 
 async function busy(btn, fn) {
-  const all = document.querySelectorAll("main button, header button");
+  const all = [...document.querySelectorAll("main button, header button")];
+  const prev = new Map(all.map((b) => [b, b.disabled]));
   all.forEach((b) => (b.disabled = true));
   const old = btn ? btn.textContent : "";
   if (btn) btn.textContent = "Please wait…";
   try { return await fn(); }
   catch (e) { banner(e.message); }
-  finally { all.forEach((b) => (b.disabled = false)); if (btn) btn.textContent = old; }
+  finally {
+    // restore the previous state, unless the button was re-rendered meanwhile
+    if (btn) btn.textContent = old;
+    all.forEach((b) => (b.disabled = prev.get(b)));
+    Schedule.refreshButtons();
+  }
 }
 
 // --- rendering --------------------------------------------------------------
@@ -74,7 +78,7 @@ function render() {
     renderKV($("#grid-extra"), d.settings.grid.filter((f) => f.key !== "export_limit_w"));
   }
   if (d.offgrid_dod) $("#offgrid-dod").value = d.offgrid_dod.value;
-  if (d.eco) renderEco(d.eco);
+  if (d.eco) Schedule.load(d.eco);
   if (d.protection) renderKV($("#protection"), d.protection);
   if (d.connect) renderKV($("#connect"), d.connect);
 
@@ -83,39 +87,6 @@ function render() {
     const t = new Date(Math.max(...times) * 1000);
     $("#readinfo").textContent = `Last read from the inverter: ${t.toLocaleString()}. Values do not refresh on their own.`;
   }
-}
-
-function renderEco(groups) {
-  const tl = $("#timeline");
-  const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
-  tl.innerHTML = groups.map((g, i) => {
-    const s = toMin(g.start), e = toMin(g.end);
-    if (e <= s) return "";
-    const cls = g.enabled ? g.mode : "off";
-    return `<div class="bar ${cls}" style="top:${4 + i * 18}px;left:${(s / 1440) * 100}%;width:${((e - s) / 1440) * 100}%"
-      title="Group ${i + 1}: ${g.start}-${g.end} ${g.mode} ${g.power_abs}%">${i + 1}</div>`;
-  }).join("") + `<div class="hours">${[0, 3, 6, 9, 12, 15, 18, 21, 24].map((h) => `<span>${h}</span>`).join("")}</div>`;
-
-  $("#eco").innerHTML = groups.map((g) => {
-    const days = DAY_ORDER.map((i) =>
-      `<label><input type="checkbox" data-day="${i}" ${g.days & (1 << i) ? "checked" : ""}><span>${DAYS[i]}</span></label>`).join("");
-    const color = g.enabled ? (g.mode === "charge" ? "var(--charge)" : "var(--discharge)") : "var(--off)";
-    return `<div class="eco-card" data-index="${g.index}">
-      <header><span><span class="dot" style="background:${color}"></span>Group ${g.index + 1}</span>
-        <span class="small ${g.enabled ? "ok-text" : "muted"}">${g.enabled ? "enabled" : "disabled"}</span></header>
-      <div class="row"><input type="time" data-k="start" value="${esc(g.start)}" aria-label="Start"> →
-        <input type="time" data-k="end" value="${esc(g.end)}" aria-label="End"></div>
-      <div class="row"><select data-k="mode" aria-label="Charge or discharge">
-          <option value="charge" ${g.mode === "charge" ? "selected" : ""}>Charge</option>
-          <option value="discharge" ${g.mode === "discharge" ? "selected" : ""}>Discharge</option></select>
-        <input type="number" data-k="power_abs" min="0" max="100" value="${g.power_abs}" aria-label="Power"> %</div>
-      <div class="days">${days}</div>
-      <div class="row">
-        <button class="primary" data-eco-save>Save and enable</button>
-        <button class="secondary" data-eco-toggle="${g.enabled ? 0 : 1}">${g.enabled ? "Disable" : "Enable"}</button>
-      </div>
-    </div>`;
-  }).join("");
 }
 
 function renderExchanges(list) {
@@ -129,8 +100,9 @@ function renderExchanges(list) {
 
 function fmt(v) {
   if (v === null || v === undefined) return "—";
+  if (Array.isArray(v)) return v.length ? v.map(fmt).join("; ") : "—";
   if (typeof v === "object") {
-    if ("start" in v) return `${v.start}-${v.end} ${v.mode} ${v.power_abs}% ${(v.days_list || []).join(" ")} ${v.enabled ? "(enabled)" : "(disabled)"}`;
+    if ("start" in v) return `#${v.index + 1} ${v.start}-${v.end} ${v.mode} ${v.power_abs}% ${(v.days_list || []).join(" ")} ${v.enabled ? "(enabled)" : "(disabled)"}`;
     return JSON.stringify(v);
   }
   return String(v);
@@ -148,6 +120,7 @@ async function loadLog() {
 // --- actions ----------------------------------------------------------------
 
 async function readAll(btn) {
+  if (btn && Schedule.hasChanges() && !confirm("Discard the unsaved changes to the charge/discharge windows?")) return;
   await busy(btn, async () => {
     banner("");
     const r = await api("/api/read", {});
@@ -185,16 +158,6 @@ async function save(setting, payload, btn) {
   });
 }
 
-function ecoPayload(card, enabledOverride) {
-  const g = { index: Number(card.dataset.index), enabled: true };
-  card.querySelectorAll("[data-k]").forEach((el) => (g[el.dataset.k] = el.value));
-  g.power_abs = Number(g.power_abs);
-  g.days = 0;
-  card.querySelectorAll("[data-day]").forEach((el) => { if (el.checked) g.days |= 1 << Number(el.dataset.day); });
-  if (enabledOverride !== undefined) g.enabled = enabledOverride;
-  return g;
-}
-
 document.addEventListener("click", (ev) => {
   const t = ev.target;
   if (!(t instanceof HTMLButtonElement)) return;
@@ -204,15 +167,9 @@ document.addEventListener("click", (ev) => {
   else if (s === "ongrid_dod") save(s, { value: Number($("#ongrid-dod").value) }, t);
   else if (s === "offgrid_dod") save(s, { value: Number($("#offgrid-dod").value) }, t);
   else if (s === "export_limit_w") save(s, { value: Number($("#export-limit").value) }, t);
-  else if (t.hasAttribute("data-eco-save")) {
-    const g = ecoPayload(t.closest(".eco-card"));
-    if (!g.days) { banner("Select at least one day."); return; }
-    save("eco_group", { group: g }, t);
-  } else if (t.dataset.ecoToggle !== undefined) {
-    const card = t.closest(".eco-card");
-    save("eco_switch", { group: { index: Number(card.dataset.index), enabled: t.dataset.ecoToggle === "1" } }, t);
-  }
 });
+
+Schedule.init($("#schedule"), (groups, btn) => save("eco_schedule", { groups }, btn), (msg) => banner(msg));
 
 $("#refresh").addEventListener("click", (e) => readAll(e.currentTarget));
 $("#read-protection").addEventListener("click", (e) => busy(e.currentTarget, async () => {
