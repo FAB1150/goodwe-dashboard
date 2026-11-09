@@ -1,6 +1,5 @@
-"""Test end-to-end dell'API contro l'inverter finto (UDP su localhost)."""
+"""End-to-end API tests against the fake inverter (UDP on localhost)."""
 
-import asyncio
 import importlib
 
 import httpx
@@ -34,15 +33,15 @@ async def _setup(tmp_path, monkeypatch, writes: bool, **fake_kw):
 async def test_read_all(tmp_path, monkeypatch):
     main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=False)
     try:
-        r = await client.post("/api/leggi")
+        r = await client.post("/api/read")
         body = r.json()
         assert body["errors"] == {}
         data = body["data"]
         assert any(f["key"] == "model" and f["value"] == "GW5048-EM" for f in data["device"])
         assert len(data["eco"]) == 4
-        assert data["eco"][0]["mode"] == "carica" and data["eco"][0]["enabled"]
+        assert data["eco"][0]["mode"] == "charge" and data["eco"][0]["enabled"]
         assert data["offgrid_dod"]["value"] == 20
-        # 4 letture, nessuna scrittura
+        # 4 reads, no writes
         assert len(fake.received) == 4
         assert all(f[4] == 0x01 for f in fake.received)
     finally:
@@ -54,15 +53,15 @@ async def test_read_all(tmp_path, monkeypatch):
 async def test_dry_run_sends_nothing(tmp_path, monkeypatch):
     main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=False)
     try:
-        await client.post("/api/leggi")
+        await client.post("/api/read")
         n = len(fake.received)
-        plan = (await client.post("/api/prepara", json={"setting": "export_limit_w", "value": 3000})).json()
+        plan = (await client.post("/api/prepare", json={"setting": "export_limit_w", "value": 3000})).json()
         assert plan["frames"][0]["request_hex"].startswith("AA 55 C0 7F 03 35 02 0B B8")
-        r = (await client.post("/api/esegui", json={"id": plan["id"], "dry_run": False})).json()
-        assert r["outcome"] == "prova a secco"  # WRITES_ENABLED=false prevale
+        r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
+        assert r["outcome"] == "dry run"  # WRITES_ENABLED=false wins
         assert len(fake.received) == n
-        log = (await client.get("/api/registro")).json()["changes"]
-        assert log[0]["prova_a_secco"] and log[0]["impostazione"] == "export_limit_w"
+        log = (await client.get("/api/changes")).json()["changes"]
+        assert log[0]["dry_run"] and log[0]["setting"] == "export_limit_w"
     finally:
         await client.aclose()
         transport.close()
@@ -72,22 +71,22 @@ async def test_dry_run_sends_nothing(tmp_path, monkeypatch):
 async def test_write_and_reread(tmp_path, monkeypatch):
     main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=True)
     try:
-        await client.post("/api/leggi")
-        # protezione SoC attiva, poi DoD 70 %
+        await client.post("/api/read")
+        # SoC protection on, then DoD 70 %
         for setting, value in (("soc_protect", True), ("ongrid_dod", 70)):
-            plan = (await client.post("/api/prepara", json={"setting": setting, "value": value})).json()
-            r = (await client.post("/api/esegui", json={"id": plan["id"], "dry_run": False})).json()
+            plan = (await client.post("/api/prepare", json={"setting": setting, "value": value})).json()
+            r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
             assert r["outcome"] == "ok", r
         assert fake.ongrid_dod == 70
         assert r["reread"] == 70
-        # fascia eco 3
-        group = {"index": 2, "start": "12:00", "end": "14:30", "mode": "scarica", "power_abs": 40, "days": 0x41, "enabled": True}
-        plan = (await client.post("/api/prepara", json={"setting": "eco_group", "group": group})).json()
-        r = (await client.post("/api/esegui", json={"id": plan["id"], "dry_run": False})).json()
+        # eco group 3
+        group = {"index": 2, "start": "12:00", "end": "14:30", "mode": "discharge", "power_abs": 40, "days": 0x41, "enabled": True}
+        plan = (await client.post("/api/prepare", json={"setting": "eco_group", "group": group})).json()
+        r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
         assert r["outcome"] == "ok", r
         assert r["reread"]["start"] == "12:00" and r["reread"]["power"] == 40 and r["reread"]["days"] == 0x41
-        log = (await client.get("/api/registro")).json()["changes"]
-        assert [c["esito"] for c in log] == ["ok", "ok", "ok"]
+        log = (await client.get("/api/changes")).json()["changes"]
+        assert [c["outcome"] for c in log] == ["ok", "ok", "ok"]
     finally:
         await client.aclose()
         transport.close()
@@ -97,11 +96,11 @@ async def test_write_and_reread(tmp_path, monkeypatch):
 async def test_rejected_write_is_reported(tmp_path, monkeypatch):
     main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=True)
     try:
-        await client.post("/api/leggi")
+        await client.post("/api/read")
         fake.reject_ack = True
-        plan = (await client.post("/api/prepara", json={"setting": "export_limit_w", "value": 1234})).json()
-        r = (await client.post("/api/esegui", json={"id": plan["id"], "dry_run": False})).json()
-        assert r["outcome"] == "rifiutato"
+        plan = (await client.post("/api/prepare", json={"setting": "export_limit_w", "value": 1234})).json()
+        r = (await client.post("/api/execute", json={"id": plan["id"], "dry_run": False})).json()
+        assert r["outcome"] == "rejected"
     finally:
         await client.aclose()
         transport.close()
@@ -112,10 +111,10 @@ async def test_silent_module_gives_clear_error(tmp_path, monkeypatch):
     main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=False, mute_for=100)
     try:
         main.state.get_client().timeout = 0.2
-        r = (await client.post("/api/leggi")).json()
-        assert "non ha risposto" in r["errors"]["device_info"]
-        assert "non risponde" in r["errors"]["settings"]
-        assert len(fake.received) == 3  # tre tentativi, poi si ferma
+        r = (await client.post("/api/read")).json()
+        assert "did not answer" in r["errors"]["device_info"]
+        assert "not responding" in r["errors"]["settings"]
+        assert len(fake.received) == 3  # three attempts, then it stops
     finally:
         await client.aclose()
         transport.close()
@@ -126,7 +125,7 @@ async def test_retry_after_lost_packet(tmp_path, monkeypatch):
     main, client, fake, transport = await _setup(tmp_path, monkeypatch, writes=False, mute_for=1)
     try:
         main.state.get_client().timeout = 0.3
-        r = (await client.post("/api/leggi")).json()
+        r = (await client.post("/api/read")).json()
         assert r["errors"] == {}
         assert r["exchanges"][0]["attempts"] == 2
     finally:
@@ -137,7 +136,7 @@ async def test_retry_after_lost_packet(tmp_path, monkeypatch):
 @pytest.mark.anyio
 async def test_basic_auth(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("PORTAL_PASSWORD", "segreta")
+    monkeypatch.setenv("PORTAL_PASSWORD", "secret")
     import app.store
     import app.main
 
@@ -145,14 +144,14 @@ async def test_basic_auth(tmp_path, monkeypatch):
     main = importlib.reload(app.main)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as c:
         assert (await c.get("/api/config")).status_code == 401
-        assert (await c.get("/api/config", auth=("admin", "segreta"))).status_code == 200
-        assert (await c.get("/salute")).status_code == 200
+        assert (await c.get("/api/config", auth=("admin", "secret"))).status_code == 200
+        assert (await c.get("/health")).status_code == 200
     monkeypatch.delenv("PORTAL_PASSWORD")
     importlib.reload(app.main)
 
 
 def test_no_protection_write_builders():
-    """Il catalogo non deve contenere costruttori di scrittura per i parametri di protezione."""
+    """The catalogue must not contain write builders for protection parameters."""
     from app import es
 
     names = [n for n in dir(es) if n.startswith("plan_")]

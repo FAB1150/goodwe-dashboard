@@ -1,8 +1,8 @@
-"""Catalogo delle impostazioni della famiglia GoodWe ES/EM (piattaforma 105), ricavato da SolarGo.
+"""Settings catalogue for the GoodWe ES/EM family (platform 105), derived from SolarGo.
 
-Ogni lettura e ogni scrittura qui riproduce i frame che SolarGo invia per un inverter
-EMU con firmware ARM 7..13 (quello di Fabio: GW5048-EM, 0909A / 410-04000-11).
-Vedi docs/PROTOCOLLO.md per i dettagli e i riferimenti al codice di SolarGo.
+Every read and write here reproduces the frames SolarGo sends to an EMU inverter
+with ARM firmware 7..13 (tested target: GW5048-EM, 0909A / 410-04000-11).
+See docs/PROTOCOL.md for details and references to the SolarGo code.
 """
 
 from __future__ import annotations
@@ -13,17 +13,17 @@ from typing import Any
 from . import protocol as p
 
 WORK_MODES = {
-    0: "Generale (autoconsumo)",
-    1: "Fuori rete (off-grid)",
+    0: "General (self-use)",
+    1: "Off-grid",
     2: "Backup",
-    3: "Eco (fasce orarie)",
+    3: "Eco (time schedule)",
 }
-# Modalità che il portale permette di impostare (off-grid escluso di proposito)
+# Work modes the portal is allowed to set (off-grid deliberately excluded)
 WRITABLE_WORK_MODES = (0, 2, 3)
 
 SAFETY_COUNTRIES = {0: "IT-CEI 0-21", 67: "IT-CEI 0-16"}
 
-WEEKDAYS = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"]  # bit 0 = domenica
+WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]  # bit 0 = Sunday
 
 ECO_BASE = 0x0701
 ECO_GROUPS = 4
@@ -34,7 +34,7 @@ REG_CLEAR_BATTERY_MODE = 0x0700
 
 
 # ---------------------------------------------------------------------------
-# Utilità di decodifica
+# Decoding helpers
 # ---------------------------------------------------------------------------
 
 
@@ -52,7 +52,7 @@ def _s16(b: bytes, off: int) -> int:
 
 @dataclass
 class Field:
-    """Un valore mostrato nella pagina."""
+    """A value shown in the page."""
 
     key: str
     label: str
@@ -61,14 +61,14 @@ class Field:
     raw: Any = None
     note: str = ""
     editable: bool = False
-    protected: bool = False  # parametro di protezione rete: solo lettura, sempre
+    protected: bool = False  # grid protection parameter: always read-only
 
     def as_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items()}
 
 
 # ---------------------------------------------------------------------------
-# 0x0102 informazioni dispositivo
+# 0x0102 device info
 # ---------------------------------------------------------------------------
 
 
@@ -86,7 +86,7 @@ class DeviceInfo:
 
     @property
     def safety_country(self) -> str:
-        return SAFETY_COUNTRIES.get(self.safety_country_code, f"codice {self.safety_country_code}")
+        return SAFETY_COUNTRIES.get(self.safety_country_code, f"code {self.safety_country_code}")
 
     @property
     def family_ok(self) -> bool:
@@ -95,7 +95,7 @@ class DeviceInfo:
 
 def parse_device_info(data: bytes) -> DeviceInfo:
     if len(data) < 64:
-        raise p.ProtocolError(f"risposta 0x0182 troppo corta ({len(data)} byte)")
+        raise p.ProtocolError(f"0x0182 response too short ({len(data)} bytes)")
     firmware = _ascii(data[0:5])
     arm_string = _ascii(data[64:76]) if len(data) >= 76 else ""
     dsp = arm = None
@@ -103,8 +103,8 @@ def parse_device_info(data: bytes) -> DeviceInfo:
         dsp = int(firmware[0:2])
     except ValueError:
         pass
-    # Come SolarGo: prima il 5° carattere del firmware (base 36: 'A' = 10),
-    # poi, se presente, il terzo campo della stringa "410-04000-11".
+    # Same as SolarGo: first the 5th firmware character (base 36: 'A' = 10),
+    # then, if present, the third field of the "410-04000-11" string.
     try:
         arm = int(firmware[4], 36)
     except (ValueError, IndexError):
@@ -130,32 +130,32 @@ def parse_device_info(data: bytes) -> DeviceInfo:
 
 def device_info_fields(info: DeviceInfo) -> list[Field]:
     return [
-        Field("model", "Modello", info.model),
-        Field("serial", "Numero di serie", info.serial),
+        Field("model", "Model", info.model),
+        Field("serial", "Serial number", info.serial),
         Field("firmware", "Firmware", info.firmware),
-        Field("software", "Versione software", info.software),
-        Field("arm_string", "Versione ARM (estesa)", info.arm_string or "—"),
-        Field("dsp_version", "Versione DSP (deriva dal firmware)", info.dsp_version),
-        Field("arm_version", "Versione ARM usata da SolarGo", info.arm_version),
+        Field("software", "Software version", info.software),
+        Field("arm_string", "ARM version (extended)", info.arm_string or "—"),
+        Field("dsp_version", "DSP version (from firmware)", info.dsp_version),
+        Field("arm_version", "ARM version as used by SolarGo", info.arm_version),
         Field(
             "safety_country",
-            "Paese di sicurezza",
+            "Safety country",
             info.safety_country,
             raw=info.safety_country_code,
             protected=True,
-            note="Parametro di interfaccia rete: solo lettura. Byte 63 della risposta 0x0182, come in SolarGo; "
-            "su alcuni firmware questo byte non contiene il paese (es. 32 = spazio).",
+            note="Grid interface parameter: read-only. Byte 63 of the 0x0182 response, as in SolarGo; "
+            "on some firmware this byte does not hold the country (e.g. 32 = space).",
         ),
     ]
 
 
 # ---------------------------------------------------------------------------
-# 0x0109 blocco impostazioni
+# 0x0109 settings block
 # ---------------------------------------------------------------------------
 
 
 def _hhmm(h: int, m: int) -> str:
-    # SolarGo: un byte 0x30 ('0' ASCII) nell'ora significa "non impostato"
+    # SolarGo: a 0x30 byte ('0' in ASCII) in the hour means "not set"
     if h == 0x30:
         h, m = 0, 0
     return f"{h:02d}:{m:02d}"
@@ -163,7 +163,7 @@ def _hhmm(h: int, m: int) -> str:
 
 def parse_settings(data: bytes) -> dict[str, Any]:
     if len(data) < 64:
-        raise p.ProtocolError(f"risposta 0x0189 troppo corta ({len(data)} byte)")
+        raise p.ProtocolError(f"0x0189 response too short ({len(data)} bytes)")
     s: dict[str, Any] = {}
     s["charge_window"] = f"{_hhmm(data[0], data[1])}-{_hhmm(data[2], data[3])}"
     s["charge_power_limit"] = _u16(data, 4)
@@ -178,7 +178,7 @@ def parse_settings(data: bytes) -> dict[str, Any]:
     s["charge_i_raw"] = _u16(data, 26)
     s["discharge_i_raw"] = _u16(data, 28)
     s["discharge_v_raw"] = _u16(data, 30)
-    s["min_soc_raw"] = _u16(data, 32)  # = 100 - DoD in rete
+    s["min_soc_raw"] = _u16(data, 32)  # = 100 - on-grid DoD
     s["battery_activated"] = _u16(data, 34)
     s["power_factor_raw"] = _u16(data, 42)
     s["float_v_raw"] = _u16(data, 44)
@@ -196,7 +196,7 @@ def parse_settings(data: bytes) -> dict[str, Any]:
 
 
 def soc_protect_on(settings: dict) -> bool:
-    # SolarGo: valore 1 = protezione SoC disattivata, altrimenti attiva
+    # SolarGo: value 1 = SoC protection off, anything else = on
     return settings["soc_protect_raw"] != 1
 
 
@@ -207,60 +207,60 @@ def ongrid_dod(settings: dict) -> int:
 def settings_fields(s: dict) -> dict[str, list[Field]]:
     wm = s.get("work_mode")
     pf_raw = s["power_factor_raw"]
-    pf = pf_raw - 100 if 0 <= pf_raw <= 20 else pf_raw  # trasformazione di SolarGo
+    pf = pf_raw - 100 if 0 <= pf_raw <= 20 else pf_raw  # SolarGo's transformation
     discharge_a = min(s["discharge_i_raw"] / 0.128 / 10, 120.0)
     charge_a = s["charge_i_raw"] / 0.266 / 10
     return {
         "mode": [
             Field(
                 "work_mode",
-                "Modalità di lavoro",
-                WORK_MODES.get(wm, f"sconosciuta ({wm})") if wm is not None else "—",
+                "Work mode",
+                WORK_MODES.get(wm, f"unknown ({wm})") if wm is not None else "—",
                 raw=wm,
                 editable=True,
             ),
-            Field("charge_window", "Finestra di carica (comando legacy 0x032C)", s["charge_window"],
-                  note=f"limite {s['charge_power_limit']} %"),
-            Field("discharge_window", "Finestra di scarica (comando legacy 0x032D)", s["discharge_window"],
-                  note=f"limite {s['discharge_power_limit']} %"),
+            Field("charge_window", "Charge window (legacy command 0x032C)", s["charge_window"],
+                  note=f"limit {s['charge_power_limit']} %"),
+            Field("discharge_window", "Discharge window (legacy command 0x032D)", s["discharge_window"],
+                  note=f"limit {s['discharge_power_limit']} %"),
         ],
         "battery": [
-            Field("soc_protect", "Protezione SoC", "attiva" if soc_protect_on(s) else "disattivata",
+            Field("soc_protect", "SoC protection", "on" if soc_protect_on(s) else "off",
                   raw=s["soc_protect_raw"], editable=True,
-                  note="In SolarGo la DoD in rete si può modificare solo con la protezione SoC attiva."),
-            Field("ongrid_dod", "Profondità di scarica (DoD) in rete", ongrid_dod(s), "%",
+                  note="SolarGo only lets you change the on-grid DoD while SoC protection is on."),
+            Field("ongrid_dod", "On-grid depth of discharge (DoD)", ongrid_dod(s), "%",
                   raw=s["min_soc_raw"], editable=True,
-                  note=f"SoC minimo in rete = {s['min_soc_raw']} %"),
-            Field("capacity_ah", "Capacità batteria", s["capacity_ah"], "Ah"),
-            Field("charge_v", "Tensione di carica", s["charge_v_raw"] / 10, "V", raw=s["charge_v_raw"]),
-            Field("charge_i", "Corrente di carica (conversione SolarGo)", round(charge_a, 1), "A",
+                  note=f"on-grid minimum SoC = {s['min_soc_raw']} %"),
+            Field("capacity_ah", "Battery capacity", s["capacity_ah"], "Ah"),
+            Field("charge_v", "Charge voltage", s["charge_v_raw"] / 10, "V", raw=s["charge_v_raw"]),
+            Field("charge_i", "Charge current (SolarGo conversion)", round(charge_a, 1), "A",
                   raw=s["charge_i_raw"]),
-            Field("discharge_v", "Tensione di scarica", s["discharge_v_raw"] / 10, "V", raw=s["discharge_v_raw"]),
-            Field("discharge_i", "Corrente di scarica (conversione SolarGo)", round(discharge_a, 1), "A",
+            Field("discharge_v", "Discharge voltage", s["discharge_v_raw"] / 10, "V", raw=s["discharge_v_raw"]),
+            Field("discharge_i", "Discharge current (SolarGo conversion)", round(discharge_a, 1), "A",
                   raw=s["discharge_i_raw"]),
-            Field("battery_model", "Modello batteria (255 = personalizzata)", s["battery_model"]),
-            Field("battery_activated", "Attivazione batteria", s["battery_activated"]),
-            Field("offgrid_charge", "Carica da rete in off-grid", s["offgrid_charge"]),
+            Field("battery_model", "Battery model (255 = custom)", s["battery_model"]),
+            Field("battery_activated", "Battery activation", s["battery_activated"]),
+            Field("offgrid_charge", "Grid charging in off-grid mode", s["offgrid_charge"]),
         ],
         "grid": [
-            Field("export_limit_w", "Limite di immissione in rete", s["export_limit_w"], "W", editable=True),
-            Field("export_limit_enabled", "Limitazione immissione (stato letto)",
-                  "attiva" if s["export_limit_enabled_raw"] == 1 else "disattivata",
+            Field("export_limit_w", "Grid export limit", s["export_limit_w"], "W", editable=True),
+            Field("export_limit_enabled", "Export limitation (read state)",
+                  "on" if s["export_limit_enabled_raw"] == 1 else "off",
                   raw=s["export_limit_enabled_raw"],
-                  note="L'interruttore non è ancora modificabile dal portale (polarità da verificare)."),
-            Field("backup_supply", "Uscita backup (EPS)", "attiva" if s["backup_supply"] else "disattivata",
+                  note="The switch cannot be changed from the portal yet (polarity to be verified)."),
+            Field("backup_supply", "Backup output (EPS)", "on" if s["backup_supply"] else "off",
                   raw=s["backup_supply"]),
-            Field("power_factor", "Fattore di potenza", pf, raw=pf_raw),
-            Field("shadow_scan", "Scansione ombre (MPPT)", "attiva" if s["shadow_scan"] else "disattivata",
+            Field("power_factor", "Power factor", pf, raw=pf_raw),
+            Field("shadow_scan", "Shadow scan (MPPT)", "on" if s["shadow_scan"] else "off",
                   raw=s["shadow_scan"]),
-            Field("grid_quality_check", "Controllo qualità rete", s.get("grid_quality_check"),
+            Field("grid_quality_check", "Grid quality check", s.get("grid_quality_check"),
                   raw=s.get("grid_quality_check")),
         ],
     }
 
 
 # ---------------------------------------------------------------------------
-# Fasce eco (registri 0x0701-0x0710, 4 gruppi da 8 byte)
+# Eco groups (registers 0x0701-0x0710, 4 groups of 8 bytes)
 # ---------------------------------------------------------------------------
 
 
@@ -269,13 +269,13 @@ class EcoGroup:
     index: int  # 0..3
     start: str  # "HH:MM"
     end: str
-    power: int  # % con segno: negativo = carica, positivo = scarica
+    power: int  # signed %: negative = charge, positive = discharge
     enabled: bool
-    days: int  # bitmask, bit0 = domenica
+    days: int  # bitmask, bit0 = Sunday
 
     @property
     def mode(self) -> str:
-        return "carica" if self.power < 0 else "scarica"
+        return "charge" if self.power < 0 else "discharge"
 
     @property
     def days_list(self) -> list[str]:
@@ -305,7 +305,7 @@ class EcoGroup:
 
 def parse_eco_groups(data: bytes) -> list[EcoGroup]:
     if len(data) != 32:
-        raise p.ProtocolError(f"fasce eco: attesi 32 byte, ricevuti {len(data)}")
+        raise p.ProtocolError(f"eco groups: expected 32 bytes, received {len(data)}")
     groups = []
     for i in range(ECO_GROUPS):
         b = data[i * 8 : i * 8 + 8]
@@ -326,28 +326,28 @@ def _parse_hhmm(t: str) -> tuple[int, int]:
     try:
         h, m = (int(x) for x in t.split(":"))
     except ValueError as e:
-        raise ValueError(f"orario non valido: {t!r}") from e
+        raise ValueError(f"invalid time: {t!r}") from e
     if not (0 <= h <= 23 and 0 <= m <= 59):
-        raise ValueError(f"orario non valido: {t!r}")
+        raise ValueError(f"invalid time: {t!r}")
     return h, m
 
 
 def validate_eco_group(g: EcoGroup) -> None:
     if not 0 <= g.index < ECO_GROUPS:
-        raise ValueError("indice gruppo non valido")
+        raise ValueError("invalid group index")
     s = _parse_hhmm(g.start)
     e = _parse_hhmm(g.end)
     if s >= e:
-        # Stesso controllo di SolarGo (BatteryModeActivity.compareTime)
-        raise ValueError("l'ora di inizio deve precedere l'ora di fine (le fasce non attraversano la mezzanotte)")
+        # Same check as SolarGo (BatteryModeActivity.compareTime)
+        raise ValueError("start time must be before end time (groups cannot cross midnight)")
     if not -100 <= g.power <= 100:
-        raise ValueError("potenza fuori intervallo [-100, 100] %")
+        raise ValueError("power out of range [-100, 100] %")
     if not 0 <= g.days <= 0x7F:
-        raise ValueError("giorni non validi")
+        raise ValueError("invalid days")
 
 
 def eco_conflicts(groups: list[EcoGroup], candidate: EcoGroup) -> list[str]:
-    """Controlli di coerenza che fa SolarGo prima di salvare/attivare una fascia."""
+    """Consistency checks SolarGo performs before saving/enabling a group."""
     problems = []
     cs, ce = _parse_hhmm(candidate.start), _parse_hhmm(candidate.end)
     for g in groups:
@@ -359,53 +359,53 @@ def eco_conflicts(groups: list[EcoGroup], candidate: EcoGroup) -> list[str]:
             continue
         same_kind = (g.power < 0) == (candidate.power < 0)
         if not same_kind:
-            problems.append(f"si sovrappone alla fascia {g.index + 1} con modalità opposta ({g.mode})")
+            problems.append(f"overlaps group {g.index + 1}, which has the opposite mode ({g.mode})")
         elif g.power != candidate.power:
-            problems.append(f"si sovrappone alla fascia {g.index + 1} con una potenza diversa ({g.power} %)")
+            problems.append(f"overlaps group {g.index + 1}, which has a different power ({g.power} %)")
     return problems
 
 
 # ---------------------------------------------------------------------------
-# Parametri di protezione rete (solo lettura, Modbus 0xB158.. e 0xB169..)
+# Grid protection parameters (read-only, Modbus 0xB158.. and 0xB169..)
 # ---------------------------------------------------------------------------
 
-# (registro, etichetta, unità, divisore)
+# (register, label, unit, divisor)
 PROTECTION_BLOCK = (0xB158, 17)
 PROTECTION_FIELDS = [
-    (0xB158, "Sovratensione 1° livello", "V", 10),
-    (0xB159, "Sovratensione 1° livello – tempo", "periodi", 1),
-    (0xB15A, "Sottotensione 1° livello", "V", 10),
-    (0xB15B, "Sottotensione 1° livello – tempo", "periodi", 1),
-    (0xB15C, "Sovratensione 2° livello", "V", 10),
-    (0xB15D, "Sovratensione 2° livello – tempo", "periodi", 1),
-    (0xB15E, "Sottotensione 2° livello", "V", 10),
-    (0xB15F, "Sottotensione 2° livello – tempo", "periodi", 1),
-    (0xB160, "Sovratensione media 10 minuti", "V", 10),
-    (0xB161, "Sovrafrequenza 1° livello", "Hz", 100),
-    (0xB162, "Sovrafrequenza 1° livello – tempo", "periodi", 1),
-    (0xB163, "Sottofrequenza 1° livello", "Hz", 100),
-    (0xB164, "Sottofrequenza 1° livello – tempo", "periodi", 1),
-    (0xB165, "Sovrafrequenza 2° livello", "Hz", 100),
-    (0xB166, "Sovrafrequenza 2° livello – tempo", "periodi", 1),
-    (0xB167, "Sottofrequenza 2° livello", "Hz", 100),
-    (0xB168, "Sottofrequenza 2° livello – tempo", "periodi", 1),
+    (0xB158, "Overvoltage stage 1", "V", 10),
+    (0xB159, "Overvoltage stage 1 – time", "periods", 1),
+    (0xB15A, "Undervoltage stage 1", "V", 10),
+    (0xB15B, "Undervoltage stage 1 – time", "periods", 1),
+    (0xB15C, "Overvoltage stage 2", "V", 10),
+    (0xB15D, "Overvoltage stage 2 – time", "periods", 1),
+    (0xB15E, "Undervoltage stage 2", "V", 10),
+    (0xB15F, "Undervoltage stage 2 – time", "periods", 1),
+    (0xB160, "10-minute average overvoltage", "V", 10),
+    (0xB161, "Overfrequency stage 1", "Hz", 100),
+    (0xB162, "Overfrequency stage 1 – time", "periods", 1),
+    (0xB163, "Underfrequency stage 1", "Hz", 100),
+    (0xB164, "Underfrequency stage 1 – time", "periods", 1),
+    (0xB165, "Overfrequency stage 2", "Hz", 100),
+    (0xB166, "Overfrequency stage 2 – time", "periods", 1),
+    (0xB167, "Underfrequency stage 2", "Hz", 100),
+    (0xB168, "Underfrequency stage 2 – time", "periods", 1),
 ]
 CONNECT_BLOCK = (0xB169, 16)
 CONNECT_FIELDS = [
-    (0xB169, "Tensione di connessione – max", "V", 10),
-    (0xB16A, "Tensione di connessione – min", "V", 10),
-    (0xB16B, "Frequenza di connessione – max", "Hz", 100),
-    (0xB16C, "Frequenza di connessione – min", "Hz", 100),
-    (0xB16D, "Attesa prima del parallelo", "s", 1),
-    (0xB16E, "Riconnessione dopo guasto: tensione max", "V", 10),
-    (0xB16F, "Riconnessione dopo guasto: tensione min", "V", 10),
-    (0xB170, "Riconnessione dopo guasto: frequenza max", "Hz", 100),
-    (0xB171, "Riconnessione dopo guasto: frequenza min", "Hz", 100),
-    (0xB172, "Riconnessione dopo guasto: attesa", "s", 1),
-    (0xB173, "Riconnessione dopo guasto di frequenza: attesa", "s", 1),
-    (0xB174, "Rampa di potenza alla connessione", "", 1),
-    (0xB175, "Rampa di potenza dopo guasto", "", 1),
-    (0xB178, "Rampa di connessione abilitata", "", 1),
+    (0xB169, "Connection voltage – max", "V", 10),
+    (0xB16A, "Connection voltage – min", "V", 10),
+    (0xB16B, "Connection frequency – max", "Hz", 100),
+    (0xB16C, "Connection frequency – min", "Hz", 100),
+    (0xB16D, "Wait time before connecting", "s", 1),
+    (0xB16E, "Reconnection after fault: voltage max", "V", 10),
+    (0xB16F, "Reconnection after fault: voltage min", "V", 10),
+    (0xB170, "Reconnection after fault: frequency max", "Hz", 100),
+    (0xB171, "Reconnection after fault: frequency min", "Hz", 100),
+    (0xB172, "Reconnection after fault: wait time", "s", 1),
+    (0xB173, "Reconnection after frequency fault: wait time", "s", 1),
+    (0xB174, "Power ramp on connection", "", 1),
+    (0xB175, "Power ramp after fault", "", 1),
+    (0xB178, "Connection ramp enabled", "", 1),
 ]
 
 
@@ -419,13 +419,13 @@ def parse_register_block(start: int, data: bytes, spec) -> list[Field]:  # noqa:
         value = raw / div if div != 1 else raw
         out.append(
             Field(f"reg_{reg:04X}", label, value, unit, raw=raw, protected=True,
-                  note=f"registro 0x{reg:04X} — solo lettura (CEI 0-21)")
+                  note=f"register 0x{reg:04X} — read-only (CEI 0-21)")
         )
     return out
 
 
 # ---------------------------------------------------------------------------
-# Letture: la sequenza che il portale esegue all'apertura / aggiornamento
+# Reads: the sequence the portal runs when the page is opened / refreshed
 # ---------------------------------------------------------------------------
 
 
@@ -438,24 +438,24 @@ class ReadStep:
 
 def page_read_steps() -> list[ReadStep]:
     return [
-        ReadStep("device_info", "Informazioni dispositivo (0x0102)", p.read_device_info()),
-        ReadStep("settings", "Impostazioni (0x0109)", p.read_settings()),
-        ReadStep("eco", "Fasce eco (registri 0x0701-0x0710)", p.read_registers(ECO_BASE, ECO_GROUPS * ECO_REGS_PER_GROUP)),
-        ReadStep("offgrid_dod", "DoD fuori rete (registro 0x05A1)", p.read_registers(REG_OFFGRID_DOD, 1)),
+        ReadStep("device_info", "Device info (0x0102)", p.read_device_info()),
+        ReadStep("settings", "Settings (0x0109)", p.read_settings()),
+        ReadStep("eco", "Eco groups (registers 0x0701-0x0710)", p.read_registers(ECO_BASE, ECO_GROUPS * ECO_REGS_PER_GROUP)),
+        ReadStep("offgrid_dod", "Off-grid DoD (register 0x05A1)", p.read_registers(REG_OFFGRID_DOD, 1)),
     ]
 
 
 def protection_read_steps() -> list[ReadStep]:
     return [
-        ReadStep("protection", "Parametri di protezione (Modbus 0xB158, 17 registri)",
+        ReadStep("protection", "Protection parameters (Modbus 0xB158, 17 registers)",
                  p.ModbusReadRequest(*PROTECTION_BLOCK)),
-        ReadStep("connect", "Parametri di connessione (Modbus 0xB169, 16 registri)",
+        ReadStep("connect", "Connection parameters (Modbus 0xB169, 16 registers)",
                  p.ModbusReadRequest(*CONNECT_BLOCK)),
     ]
 
 
 # ---------------------------------------------------------------------------
-# Scritture: piani di comandi (riproducono le sequenze di SolarGo)
+# Writes: command plans (reproduce SolarGo's sequences)
 # ---------------------------------------------------------------------------
 
 
@@ -463,7 +463,7 @@ def protection_read_steps() -> list[ReadStep]:
 class WriteStep:
     description: str
     request: p.Request
-    must_ack: bool = True  # SolarGo considera riuscito solo l'ACK (0x06)
+    must_ack: bool = True  # SolarGo only treats an ACK (0x06) as success
 
 
 @dataclass
@@ -473,42 +473,42 @@ class WritePlan:
     before: Any
     after: Any
     steps: list[WriteStep]
-    verify: list[str] = field(default_factory=list)  # chiavi di lettura da ripetere dopo la scrittura
+    verify: list[str] = field(default_factory=list)  # read keys to repeat after the write
     warning: str = ""
 
 
 def _work_mode_cmd(mode: int) -> WriteStep:
-    return WriteStep(f"modalità di lavoro = {mode} ({WORK_MODES[mode]})", p.classic_command(0x59, bytes([mode])))
+    return WriteStep(f"work mode = {mode} ({WORK_MODES[mode]})", p.classic_command(0x59, bytes([mode])))
 
 
 def _offgrid_flag(v: int) -> WriteStep:
-    return WriteStep(f"flag lavoro fuori rete = {v}", p.classic_command(0x36, bytes([v])))
+    return WriteStep(f"off-grid work mode flag = {v}", p.classic_command(0x36, bytes([v])))
 
 
 def _legacy_window(func: int, start: str, end: str, limit: int, what: str) -> WriteStep:
     sh, sm = _parse_hhmm(start)
     eh, em = _parse_hhmm(end)
     return WriteStep(
-        f"finestra di {what} {start}-{end}, limite {limit} %",
+        f"{what} window {start}-{end}, limit {limit} %",
         p.classic_command(func, bytes([sh, sm, eh, em, limit])),
     )
 
 
 def _clear_battery_mode() -> WriteStep:
     return WriteStep(
-        "azzeramento parametri modalità batteria (registro 0x0700 = 1)",
+        "reset battery mode parameters (register 0x0700 = 1)",
         p.write_registers(REG_CLEAR_BATTERY_MODE, (1).to_bytes(2, "big")),
     )
 
 
 def plan_work_mode(current: int | None, mode: int) -> WritePlan:
-    """Sequenze di ChooseWorkModeActivity per ES/EM con ARM >= 7 e senza "nuova modalità eco"."""
+    """ChooseWorkModeActivity sequences for ES/EM with ARM >= 7 and no "new eco mode"."""
     if mode not in WRITABLE_WORK_MODES:
-        raise ValueError("modalità non consentita dal portale")
+        raise ValueError("work mode not allowed by the portal")
     if mode == 0:
         steps = [
-            _legacy_window(0x2C, "00:00", "00:00", 0, "carica"),
-            _legacy_window(0x2D, "00:00", "00:00", 0, "scarica"),
+            _legacy_window(0x2C, "00:00", "00:00", 0, "charge"),
+            _legacy_window(0x2D, "00:00", "00:00", 0, "discharge"),
             _clear_battery_mode(),
             _work_mode_cmd(0),
             _offgrid_flag(0),
@@ -518,16 +518,16 @@ def plan_work_mode(current: int | None, mode: int) -> WritePlan:
         steps = [
             _clear_battery_mode(),
             _offgrid_flag(0),
-            _legacy_window(0x2C, "00:00", "23:59", 10, "carica"),
+            _legacy_window(0x2C, "00:00", "23:59", 10, "charge"),
             _work_mode_cmd(2),
         ]
-        warning = "Come in SolarGo, la modalità backup azzera i parametri delle modalità batteria."
+        warning = "As in SolarGo, backup mode resets the battery mode parameters."
     else:  # eco
         steps = [_work_mode_cmd(3)]
-        warning = "In modalità eco l'inverter segue le fasce orarie attive."
+        warning = "In eco mode the inverter follows the enabled time groups."
     return WritePlan(
         setting="work_mode",
-        label="Modalità di lavoro",
+        label="Work mode",
         before=WORK_MODES.get(current, current) if current is not None else None,
         after=WORK_MODES[mode],
         steps=steps,
@@ -537,18 +537,18 @@ def plan_work_mode(current: int | None, mode: int) -> WritePlan:
 
 
 def plan_eco_group(groups: list[EcoGroup], new: EcoGroup) -> WritePlan:
-    """BatteryModeActivity: modalità eco (0x0359=3) + scrittura dei 4 registri del gruppo."""
+    """BatteryModeActivity: eco work mode (0x0359=3) + write the group's 4 registers."""
     validate_eco_group(new)
     old = next((g for g in groups if g.index == new.index), None)
     reg = ECO_BASE + new.index * ECO_REGS_PER_GROUP
     return WritePlan(
         setting=f"eco_group_{new.index + 1}",
-        label=f"Fascia eco {new.index + 1}",
+        label=f"Eco group {new.index + 1}",
         before=old.as_dict() if old else None,
         after=new.as_dict(),
         steps=[
             _work_mode_cmd(3),
-            WriteStep(f"fascia {new.index + 1}: registri 0x{reg:04X}-0x{reg + 3:04X}", p.write_registers(reg, new.to_bytes())),
+            WriteStep(f"group {new.index + 1}: registers 0x{reg:04X}-0x{reg + 3:04X}", p.write_registers(reg, new.to_bytes())),
         ],
         verify=["eco", "settings"],
         warning="; ".join(eco_conflicts(groups, new)),
@@ -556,19 +556,19 @@ def plan_eco_group(groups: list[EcoGroup], new: EcoGroup) -> WritePlan:
 
 
 def plan_eco_switch(groups: list[EcoGroup], index: int, enabled: bool) -> WritePlan:
-    """BatteryModeListActivity: modalità eco + registro "switch" del gruppo (byte attivo + giorni)."""
+    """BatteryModeListActivity: eco work mode + the group's "switch" register (enable byte + days)."""
     g = next(g for g in groups if g.index == index)
     reg = ECO_BASE + index * ECO_REGS_PER_GROUP + 3
     candidate = EcoGroup(g.index, g.start, g.end, g.power, enabled, g.days)
     return WritePlan(
         setting=f"eco_group_{index + 1}_switch",
-        label=f"Fascia eco {index + 1}: {'attiva' if enabled else 'disattiva'}",
-        before="attiva" if g.enabled else "disattiva",
-        after="attiva" if enabled else "disattiva",
+        label=f"Eco group {index + 1}: {'enable' if enabled else 'disable'}",
+        before="enabled" if g.enabled else "disabled",
+        after="enabled" if enabled else "disabled",
         steps=[
             _work_mode_cmd(3),
             WriteStep(
-                f"fascia {index + 1}: registro 0x{reg:04X} = {'FF' if enabled else '00'} + giorni",
+                f"group {index + 1}: register 0x{reg:04X} = {'FF' if enabled else '00'} + days",
                 p.write_registers(reg, bytes([0xFF if enabled else 0x00, g.days & 0x7F])),
             ),
         ],
@@ -578,61 +578,61 @@ def plan_eco_switch(groups: list[EcoGroup], index: int, enabled: bool) -> WriteP
 
 
 def plan_soc_protect(settings: dict, enabled: bool) -> WritePlan:
-    """Comando 0x033B: 00 <0 = attiva, 1 = disattiva> 00 (sorgente C0)."""
+    """Command 0x033B: 00 <0 = on, 1 = off> 00 (source C0)."""
     return WritePlan(
         setting="soc_protect",
-        label="Protezione SoC",
-        before="attiva" if soc_protect_on(settings) else "disattivata",
-        after="attiva" if enabled else "disattivata",
-        steps=[WriteStep("protezione SoC", p.classic_command(0x3B, bytes([0, 0 if enabled else 1, 0])))],
+        label="SoC protection",
+        before="on" if soc_protect_on(settings) else "off",
+        after="on" if enabled else "off",
+        steps=[WriteStep("SoC protection", p.classic_command(0x3B, bytes([0, 0 if enabled else 1, 0])))],
         verify=["settings"],
     )
 
 
 def plan_ongrid_dod(settings: dict, dod: int) -> WritePlan:
-    """BatteryFunction105Activity: registro 0x0560 = 100 - DoD, sorgente B0."""
+    """BatteryFunction105Activity: register 0x0560 = 100 - DoD, source B0."""
     if not 0 <= dod <= 95:
-        raise ValueError("DoD fuori intervallo [0, 95] %")
+        raise ValueError("DoD out of range [0, 95] %")
     warning = ""
     if not soc_protect_on(settings):
         warning = (
-            "La protezione SoC è disattivata: SolarGo in questo caso non permette di modificare la DoD "
-            "(e la reinvia invariata). Attiva prima la protezione SoC."
+            "SoC protection is off: in this case SolarGo does not let you change the DoD "
+            "(it re-sends it unchanged). Turn SoC protection on first."
         )
     return WritePlan(
         setting="ongrid_dod",
-        label="DoD in rete",
+        label="On-grid DoD",
         before=ongrid_dod(settings),
         after=dod,
-        steps=[WriteStep(f"registro 0x0560 = {100 - dod} (100 − DoD)", p.write_registers(REG_ONGRID_DOD, (100 - dod).to_bytes(2, "big")))],
+        steps=[WriteStep(f"register 0x0560 = {100 - dod} (100 − DoD)", p.write_registers(REG_ONGRID_DOD, (100 - dod).to_bytes(2, "big")))],
         verify=["settings"],
         warning=warning,
     )
 
 
 def plan_offgrid_dod(current: int | None, dod: int) -> WritePlan:
-    """Registro 0x05A1 = 100 - DoD, sorgente B0 (BatteryFunction105Activity)."""
+    """Register 0x05A1 = 100 - DoD, source B0 (BatteryFunction105Activity)."""
     if not 0 <= dod <= 95:
-        raise ValueError("DoD fuori intervallo [0, 95] %")
+        raise ValueError("DoD out of range [0, 95] %")
     return WritePlan(
         setting="offgrid_dod",
-        label="DoD fuori rete",
+        label="Off-grid DoD",
         before=current,
         after=dod,
-        steps=[WriteStep(f"registro 0x05A1 = {100 - dod} (100 − DoD)", p.write_registers(REG_OFFGRID_DOD, (100 - dod).to_bytes(2, "big")))],
+        steps=[WriteStep(f"register 0x05A1 = {100 - dod} (100 − DoD)", p.write_registers(REG_OFFGRID_DOD, (100 - dod).to_bytes(2, "big")))],
         verify=["offgrid_dod"],
     )
 
 
 def plan_export_limit(settings: dict, watts: int) -> WritePlan:
-    """Comando 0x0335 con il limite in W (2 byte), sorgente C0."""
+    """Command 0x0335 with the limit in W (2 bytes), source C0."""
     if not 0 <= watts <= 10000:
-        raise ValueError("limite fuori intervallo [0, 10000] W")
+        raise ValueError("limit out of range [0, 10000] W")
     return WritePlan(
         setting="export_limit_w",
-        label="Limite di immissione",
+        label="Grid export limit",
         before=settings["export_limit_w"],
         after=watts,
-        steps=[WriteStep(f"limite di immissione = {watts} W", p.classic_command(0x35, watts.to_bytes(2, "big")))],
+        steps=[WriteStep(f"export limit = {watts} W", p.classic_command(0x35, watts.to_bytes(2, "big")))],
         verify=["settings"],
     )

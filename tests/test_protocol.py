@@ -1,4 +1,4 @@
-"""Test del framing: frame costruiti dal portale e frame registrati da inverter reali."""
+"""Framing tests: frames built by the portal and frames recorded from real inverters."""
 
 from pathlib import Path
 
@@ -15,11 +15,11 @@ def sample(name: str) -> bytes:
     return bytes.fromhex(SAMPLES.joinpath(name).read_text().strip())
 
 
-# --- Frame identici a quelli della libreria goodwe (stessa sorgente C0) -----
+# --- Frames identical to the goodwe library ones (same source C0) ----------
 
 
 def test_read_settings_frame_matches_goodwe_library():
-    # tests/test_es.py della libreria goodwe: 'aa55c07f0109000248'
+    # goodwe library, tests/test_es.py: 'aa55c07f0109000248'
     assert p.read_settings().to_bytes().hex() == "aa55c07f0109000248"
 
 
@@ -33,22 +33,22 @@ def test_device_info_frame():
     assert p.read_device_info().to_bytes().hex() == "aa55c07f0102000241"  # 0xAA+0x55+0xC0+0x7F+0x01+0x02 = 0x241
 
 
-# --- Frame "alla SolarGo" (sorgente B0 per i registri) ---------------------
+# --- SolarGo-style frames (source B0 for registers) ------------------------
 
 
 def test_ongrid_dod_uses_b0_source_unlike_home_assistant():
     settings = {"soc_protect_raw": 0, "min_soc_raw": 20}
     frame = es.plan_ongrid_dod(settings, 80).steps[0].request.to_bytes()
-    # Home Assistant / goodwe invia: aa55 c07f 0239 05 0560 01 0014 02f8
+    # Home Assistant / goodwe sends: aa55 c07f 0239 05 0560 01 0014 02f8
     ha = bytes.fromhex("aa55c07f023905056001001402f8")
     assert frame[:2] == ha[:2]
-    assert frame[2] == 0xB0 and ha[2] == 0xC0  # unica differenza: l'indirizzo sorgente
+    assert frame[2] == 0xB0 and ha[2] == 0xC0  # the only difference: the source address
     assert frame[3:-2] == ha[3:-2]
     assert frame.hex() == "aa55b07f023905056001001402e8"
 
 
 def test_solargo_register_prefixes():
-    # prefissi copiati da DataCollectUtil.build105SettingPackage / build105ReadingPackage
+    # prefixes taken from SolarGo's DataCollectUtil.build105SettingPackage / build105ReadingPackage
     assert p.read_registers(0x0701, 16).to_bytes()[:-2] == bytes([0xAA, 0x55, 0xB0, 0x7F, 1, 0x1A, 3, 7, 1, 16])
     assert p.read_registers(0x05A1, 1).to_bytes()[:-2] == bytes([0xAA, 0x55, 0xB0, 0x7F, 1, 0x1A, 3, 5, 0xA1, 1])
     g = es.EcoGroup(0, "01:00", "05:00", -50, True, 0x7F)
@@ -64,13 +64,13 @@ def test_checksum_is_plain_sum():
 
 
 def test_modbus_crc_known_vector():
-    # CRC Modbus di "01 03 00 00 00 0A" = C5CD (byte basso per primo)
+    # Modbus CRC of "01 03 00 00 00 0A" = C5CD (low byte first)
     assert p.crc16_modbus(bytes.fromhex("01030000000a")) == 0xCDC5
     req = p.ModbusReadRequest(0xB158, 17)
     assert req.to_bytes()[:6] == bytes.fromhex("f703b1580011")
 
 
-# --- Parsing di frame registrati da inverter reali ------------------------
+# --- Parsing frames recorded from real inverters ---------------------------
 
 
 def test_parse_recorded_em_device_info():
@@ -87,7 +87,7 @@ def test_parse_recorded_em_device_info():
 def test_parse_recorded_es_settings():
     resp = p.parse_aa55(sample("GW5048D-ES_settings_data.hex"))
     s = es.parse_settings(resp.data)
-    # stessi offset della libreria goodwe
+    # same offsets as the goodwe library
     assert s["capacity_ah"] == int.from_bytes(resp.data[22:24], "big")
     assert es.ongrid_dod(s) == 100 - int.from_bytes(resp.data[32:34], "big")
     assert s["work_mode"] in es.WORK_MODES
@@ -96,7 +96,7 @@ def test_parse_recorded_es_settings():
 
 
 def test_parse_recorded_eco_register_reply():
-    # risposta registrata nella libreria goodwe per la lettura del registro 1793 (0x0701)
+    # reply recorded in the goodwe library for a read of register 1793 (0x0701)
     resp = p.parse_aa55(bytes.fromhex("aa557fc0019a08000000000000007f0360"))
     assert resp.data == bytes.fromhex("000000000000007f")
 
@@ -113,7 +113,7 @@ def test_reply_type_mismatch_is_rejected():
         p.check_aa55_reply(p.read_settings(), sample("GW5048-EM_device_info.hex"))
 
 
-# --- Fasce eco ---------------------------------------------------------------
+# --- Eco groups ----------------------------------------------------------------
 
 
 def test_eco_group_roundtrip():
@@ -121,8 +121,8 @@ def test_eco_group_roundtrip():
     data = bytes(16) + g.to_bytes() + bytes(8)
     parsed = es.parse_eco_groups(data)[2]
     assert parsed == g
-    assert parsed.mode == "carica"
-    assert parsed.days_list == ["Lun", "Mar", "Mer", "Gio", "Ven"]
+    assert parsed.mode == "charge"
+    assert parsed.days_list == ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
 
 def test_eco_group_validation():
@@ -140,14 +140,14 @@ def test_eco_conflict_detection():
     assert not es.eco_conflicts([a, c], c)
 
 
-# --- Sequenze di scrittura --------------------------------------------------
+# --- Write sequences -----------------------------------------------------------
 
 
 def test_work_mode_general_sequence_like_solargo():
     plan = es.plan_work_mode(3, 0)
     codes = [(s.request.ctrl, s.request.func) for s in plan.steps]
     assert codes == [(3, 0x2C), (3, 0x2D), (2, 0x39), (3, 0x59), (3, 0x36)]
-    # la libreria goodwe (test commentato) per la modalità 1 usa 'aa55c07f03590101029c'
+    # the goodwe library (commented-out test) uses 'aa55c07f03590101029c' for mode 1
     assert plan.steps[3].request.to_bytes().hex() == "aa55c07f03590100029b"
 
 
@@ -165,23 +165,23 @@ def test_soc_protect_payload():
 
 def test_dod_warning_when_soc_protection_off():
     plan = es.plan_ongrid_dod({"soc_protect_raw": 1, "min_soc_raw": 20}, 70)
-    assert "protezione SoC" in plan.warning
+    assert "SoC protection" in plan.warning
 
 
-# --- Parametri di protezione rete: mai scrivibili -------------------------
+# --- Grid protection parameters: never writable -----------------------------
 
 
 @pytest.mark.parametrize(
     "req",
     [
-        p.write_registers(0x0579, (2530).to_bytes(2, "big")),  # soglie tensione EMJ
-        p.write_registers(0x0001, (60).to_bytes(2, "big")),  # tempo di riconnessione
-        p.write_registers(0x7150, (1).to_bytes(2, "big")),  # anti-islanding attivo
-        p.write_registers(0x0700, bytes(4)),  # oltre il registro ammesso
-        p.Aa55Request(p.SRC_REGISTER, 0x02, 0x3A, bytes([3, 0])),  # paese di sicurezza (0x023A)
-        p.classic_command(0x01, bytes([0])),  # paese di sicurezza (0x0301)
-        p.classic_command(0x3C, bytes([0])),  # sicurezza AU
-        p.Aa55Request(p.SRC_REGISTER, 0x03, 0x59, bytes([0])),  # comando giusto, sorgente sbagliata
+        p.write_registers(0x0579, (2530).to_bytes(2, "big")),  # EMJ voltage thresholds
+        p.write_registers(0x0001, (60).to_bytes(2, "big")),  # reconnection time
+        p.write_registers(0x7150, (1).to_bytes(2, "big")),  # active anti-islanding
+        p.write_registers(0x0700, bytes(4)),  # beyond the allowed register
+        p.Aa55Request(p.SRC_REGISTER, 0x02, 0x3A, bytes([3, 0])),  # safety country (0x023A)
+        p.classic_command(0x01, bytes([0])),  # safety country (0x0301)
+        p.classic_command(0x3C, bytes([0])),  # AU safety
+        p.Aa55Request(p.SRC_REGISTER, 0x03, 0x59, bytes([0])),  # right command, wrong source
     ],
 )
 def test_protection_writes_are_blocked(req):

@@ -1,9 +1,9 @@
-"""Inverter ES finto su UDP, per i test e per provare la pagina senza l'inverter vero.
+"""Fake ES inverter over UDP, for tests and for trying the page without the real inverter.
 
-Risponde con i frame registrati da un GW5048-EM reale (cartella samples, presi dai test della
-libreria `goodwe`, licenza MIT) e simula registri/impostazioni in memoria.
+Answers with frames recorded from a real GW5048-EM (samples folder, taken from the tests of the
+`goodwe` library, MIT licence) and simulates registers/settings in memory.
 
-Uso manuale:  python -m tests.fake_inverter 18899
+Manual use:  python -m tests.fake_inverter 18899
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ class FakeInverter(asyncio.DatagramProtocol):
         self.device_info = _sample_data("GW5048-EM_device_info.hex")
         self.settings = bytearray(_sample_data("GW5048D-ES_settings_data.hex"))
         self.registers: dict[int, int] = {}
-        # fasce eco: gruppo 1 carica 01:00-05:00 al 50 % tutti i giorni, attivo
+        # eco groups: group 1 charges 01:00-05:00 at 50 % every day, enabled
         eco = bytes([1, 0, 5, 0]) + (-50).to_bytes(2, "big", signed=True) + bytes([0xFF, 0x7F])
-        eco += bytes([17, 0, 21, 0, 0, 100, 0x00, 0x3E])  # gruppo 2 scarica, non attivo, lun-ven
+        eco += bytes([17, 0, 21, 0, 0, 100, 0x00, 0x3E])  # group 2 discharges, disabled, Mon-Fri
         eco += bytes(16)
         for i in range(16):
             self.registers[0x0701 + i] = int.from_bytes(eco[i * 2 : i * 2 + 2], "big")
@@ -40,7 +40,7 @@ class FakeInverter(asyncio.DatagramProtocol):
         for i in range(16):
             self.registers[0xB169 + i] = 5010 - i
         self.received: list[bytes] = []
-        self.mute_for = mute_for  # numero di richieste da ignorare (simula il modulo WiFi muto)
+        self.mute_for = mute_for  # number of requests to ignore (simulates a silent WiFi module)
         self.transport = None
         self.reject_ack = False
 
@@ -62,7 +62,7 @@ class FakeInverter(asyncio.DatagramProtocol):
             data = b"".join(self.registers.get(start + i, 0).to_bytes(2, "big") for i in range(count))
             body = bytes([p.MODBUS_ADDR, 0x03, len(data)]) + data
             return p.HEADER + body + p.crc16_modbus(body).to_bytes(2, "little")
-        req = p.parse_aa55(frame)  # la richiesta ha la stessa struttura della risposta
+        req = p.parse_aa55(frame)  # a request has the same structure as a response
         src, ctrl, func, data = frame[2], req.ctrl, req.func, req.data
         ack = bytes([p.NAK if self.reject_ack else p.ACK])
         if (ctrl, func) == (0x01, 0x02):
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     async def _main() -> None:
         port = int(sys.argv[1]) if len(sys.argv) > 1 else 18899
         await start(port)
-        print(f"Inverter finto in ascolto su 127.0.0.1:{port} (UDP)")
+        print(f"Fake inverter listening on 127.0.0.1:{port} (UDP)")
         await asyncio.Event().wait()
 
     asyncio.run(_main())

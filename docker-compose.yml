@@ -1,23 +1,23 @@
-# Stack per Portainer ("Stacks" -> "Add stack" -> "Repository").
+# Portainer stack ("Stacks" -> "Add stack" -> "Repository").
 services:
-  portale-goodwe:
+  goodwe-dashboard:
     build: .
-    image: portale-goodwe:latest
-    container_name: portale-goodwe
+    image: goodwe-dashboard:latest
+    container_name: goodwe-dashboard
     restart: unless-stopped
     ports:
-      - "8080:8080"           # pagina web: http://<ip-raspberry>:8080
+      - "8080:8080"           # web page: http://<host-ip>:8080
     volumes:
-      - portale-goodwe-dati:/data   # IP salvato e registro modifiche
+      - goodwe-dashboard-data:/data   # saved IP and change log
     environment:
-      # Fase 1: sola lettura. Metti "true" solo quando vuoi provare le scritture.
+      # Phase 1: read-only. Set to "true" only when you want to try writes.
       WRITES_ENABLED: "false"
-      # Facoltativo: IP iniziale (si può comunque cambiare dalla pagina)
+      # Optional: initial inverter IP (can also be changed from the page)
       INVERTER_HOST: ""
-      # Facoltativo: login semplice (HTTP Basic). Vuoto = nessuna password.
+      # Optional: simple login (HTTP Basic). Empty = no password.
       PORTAL_USER: "admin"
       PORTAL_PASSWORD: ""
       TZ: "Europe/Rome"
 
 volumes:
-  portale-goodwe-dati:
+  goodwe-dashboard-data:

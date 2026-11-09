@@ -1,8 +1,8 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
-const DAYS = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
-const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // mostra lun..dom
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // show Mon..Sun
 let view = {};
 let config = {};
 
@@ -22,8 +22,8 @@ async function api(path, body) {
   const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   const r = await fetch(path, opt);
   let data = null;
-  try { data = await r.json(); } catch { /* vuoto */ }
-  if (!r.ok) throw new Error((data && data.detail) || `Errore HTTP ${r.status}`);
+  try { data = await r.json(); } catch { /* empty body */ }
+  if (!r.ok) throw new Error((data && data.detail) || `HTTP error ${r.status}`);
   return data;
 }
 
@@ -31,7 +31,7 @@ async function busy(btn, fn) {
   const all = document.querySelectorAll("main button, header button");
   all.forEach((b) => (b.disabled = true));
   const old = btn ? btn.textContent : "";
-  if (btn) btn.textContent = "Attendere…";
+  if (btn) btn.textContent = "Please wait…";
   try { return await fn(); }
   catch (e) { banner(e.message); }
   finally { all.forEach((b) => (b.disabled = false)); if (btn) btn.textContent = old; }
@@ -42,7 +42,7 @@ async function busy(btn, fn) {
 function renderKV(el, fields) {
   el.innerHTML = (fields || []).map((f) => {
     const unit = f.unit ? ` ${esc(f.unit)}` : "";
-    const raw = f.raw !== null && f.raw !== undefined && f.raw !== f.value ? ` <span class="raw">(grezzo ${esc(f.raw)})</span>` : "";
+    const raw = f.raw !== null && f.raw !== undefined && f.raw !== f.value ? ` <span class="raw">(raw ${esc(f.raw)})</span>` : "";
     const note = f.note ? `<br><span class="raw">${esc(f.note)}</span>` : "";
     return `<dt>${esc(f.label)}</dt><dd>${esc(f.value ?? "—")}${unit}${raw}${note}</dd>`;
   }).join("");
@@ -63,12 +63,12 @@ function render() {
     const wm = d.work_mode;
     const sel = $("#work-mode");
     if ([0, 2, 3].includes(wm)) sel.value = String(wm);
-    $("#work-mode-current").textContent = `Attuale: ${field("mode", "work_mode").value}`;
+    $("#work-mode-current").textContent = `Current: ${field("mode", "work_mode").value}`;
     renderKV($("#mode-extra"), d.settings.mode.filter((f) => f.key !== "work_mode"));
     $("#soc-protect").value = d.soc_protect_on ? "1" : "0";
     const dod = field("battery", "ongrid_dod");
     $("#ongrid-dod").value = dod.value;
-    $("#ongrid-dod-hint").textContent = d.soc_protect_on ? `SoC minimo ${dod.raw} %` : "Attiva la protezione SoC per modificarla";
+    $("#ongrid-dod-hint").textContent = d.soc_protect_on ? `minimum SoC ${dod.raw} %` : "Turn SoC protection on to change it";
     renderKV($("#battery-extra"), d.settings.battery.filter((f) => !["soc_protect", "ongrid_dod"].includes(f.key)));
     $("#export-limit").value = field("grid", "export_limit_w").value;
     renderKV($("#grid-extra"), d.settings.grid.filter((f) => f.key !== "export_limit_w"));
@@ -81,7 +81,7 @@ function render() {
   const times = Object.values(d.read_at || {});
   if (times.length) {
     const t = new Date(Math.max(...times) * 1000);
-    $("#readinfo").textContent = `Ultima lettura dall'inverter: ${t.toLocaleString("it-IT")}. I valori non si aggiornano da soli.`;
+    $("#readinfo").textContent = `Last read from the inverter: ${t.toLocaleString()}. Values do not refresh on their own.`;
   }
 }
 
@@ -93,26 +93,26 @@ function renderEco(groups) {
     if (e <= s) return "";
     const cls = g.enabled ? g.mode : "off";
     return `<div class="bar ${cls}" style="top:${4 + i * 18}px;left:${(s / 1440) * 100}%;width:${((e - s) / 1440) * 100}%"
-      title="Fascia ${i + 1}: ${g.start}-${g.end} ${g.mode} ${g.power_abs}%">${i + 1}</div>`;
+      title="Group ${i + 1}: ${g.start}-${g.end} ${g.mode} ${g.power_abs}%">${i + 1}</div>`;
   }).join("") + `<div class="hours">${[0, 3, 6, 9, 12, 15, 18, 21, 24].map((h) => `<span>${h}</span>`).join("")}</div>`;
 
   $("#eco").innerHTML = groups.map((g) => {
     const days = DAY_ORDER.map((i) =>
       `<label><input type="checkbox" data-day="${i}" ${g.days & (1 << i) ? "checked" : ""}><span>${DAYS[i]}</span></label>`).join("");
-    const color = g.enabled ? (g.mode === "carica" ? "var(--charge)" : "var(--discharge)") : "var(--off)";
+    const color = g.enabled ? (g.mode === "charge" ? "var(--charge)" : "var(--discharge)") : "var(--off)";
     return `<div class="eco-card" data-index="${g.index}">
-      <header><span><span class="dot" style="background:${color}"></span>Fascia ${g.index + 1}</span>
-        <span class="small ${g.enabled ? "ok-text" : "muted"}">${g.enabled ? "attiva" : "non attiva"}</span></header>
-      <div class="row"><input type="time" data-k="start" value="${esc(g.start)}" aria-label="Inizio"> →
-        <input type="time" data-k="end" value="${esc(g.end)}" aria-label="Fine"></div>
-      <div class="row"><select data-k="mode" aria-label="Carica o scarica">
-          <option value="carica" ${g.mode === "carica" ? "selected" : ""}>Carica</option>
-          <option value="scarica" ${g.mode === "scarica" ? "selected" : ""}>Scarica</option></select>
-        <input type="number" data-k="power_abs" min="0" max="100" value="${g.power_abs}" aria-label="Potenza"> %</div>
+      <header><span><span class="dot" style="background:${color}"></span>Group ${g.index + 1}</span>
+        <span class="small ${g.enabled ? "ok-text" : "muted"}">${g.enabled ? "enabled" : "disabled"}</span></header>
+      <div class="row"><input type="time" data-k="start" value="${esc(g.start)}" aria-label="Start"> →
+        <input type="time" data-k="end" value="${esc(g.end)}" aria-label="End"></div>
+      <div class="row"><select data-k="mode" aria-label="Charge or discharge">
+          <option value="charge" ${g.mode === "charge" ? "selected" : ""}>Charge</option>
+          <option value="discharge" ${g.mode === "discharge" ? "selected" : ""}>Discharge</option></select>
+        <input type="number" data-k="power_abs" min="0" max="100" value="${g.power_abs}" aria-label="Power"> %</div>
       <div class="days">${days}</div>
       <div class="row">
-        <button class="primary" data-eco-save>Salva e attiva</button>
-        <button class="secondary" data-eco-toggle="${g.enabled ? 0 : 1}">${g.enabled ? "Disattiva" : "Attiva"}</button>
+        <button class="primary" data-eco-save>Save and enable</button>
+        <button class="secondary" data-eco-toggle="${g.enabled ? 0 : 1}">${g.enabled ? "Disable" : "Enable"}</button>
       </div>
     </div>`;
   }).join("");
@@ -121,7 +121,7 @@ function renderEco(groups) {
 function renderExchanges(list) {
   if (!list || !list.length) return;
   $("#exchanges").innerHTML = list.map((x) => `<div class="ex">
-    <div><b>${esc(x.description)}</b> ${x.sent ? "" : "<i>(non inviato)</i>"} ${x.attempts ? `· tentativi ${x.attempts}` : ""} ${x.elapsed_ms ? `· ${x.elapsed_ms} ms` : ""}</div>
+    <div><b>${esc(x.description)}</b> ${x.sent ? "" : "<i>(not sent)</i>"} ${x.attempts ? `· attempts ${x.attempts}` : ""} ${x.elapsed_ms ? `· ${x.elapsed_ms} ms` : ""}</div>
     <div>→ ${esc(x.request_hex)}</div>
     ${x.response_hex ? `<div>← ${esc(x.response_hex)}</div>` : ""}
     ${x.error ? `<div class="err-text">${esc(x.error)}</div>` : ""}</div>`).join("");
@@ -130,27 +130,27 @@ function renderExchanges(list) {
 function fmt(v) {
   if (v === null || v === undefined) return "—";
   if (typeof v === "object") {
-    if ("start" in v) return `${v.start}-${v.end} ${v.mode} ${v.power_abs}% ${(v.days_list || []).join(" ")} ${v.enabled ? "(attiva)" : "(non attiva)"}`;
+    if ("start" in v) return `${v.start}-${v.end} ${v.mode} ${v.power_abs}% ${(v.days_list || []).join(" ")} ${v.enabled ? "(enabled)" : "(disabled)"}`;
     return JSON.stringify(v);
   }
   return String(v);
 }
 
 async function loadLog() {
-  const { changes } = await api("/api/registro");
+  const { changes } = await api("/api/changes");
   $("#log tbody").innerHTML = changes.map((c) => `<tr>
-    <td>${esc(new Date(c.quando).toLocaleString("it-IT"))}</td><td>${esc(c.etichetta)}</td>
-    <td>${esc(fmt(c.prima))}</td><td>${esc(fmt(c.richiesto))}</td><td>${esc(fmt(c.riletto))}</td>
-    <td class="${c.esito === "ok" ? "ok-text" : c.prova_a_secco ? "muted" : "err-text"}">${esc(c.esito)}</td></tr>`).join("")
-    || `<tr><td colspan="6" class="muted">Nessuna modifica registrata.</td></tr>`;
+    <td>${esc(new Date(c.at).toLocaleString())}</td><td>${esc(c.label)}</td>
+    <td>${esc(fmt(c.before))}</td><td>${esc(fmt(c.requested))}</td><td>${esc(fmt(c.reread))}</td>
+    <td class="${c.outcome === "ok" ? "ok-text" : c.dry_run ? "muted" : "err-text"}">${esc(c.outcome)}</td></tr>`).join("")
+    || `<tr><td colspan="6" class="muted">No changes logged yet.</td></tr>`;
 }
 
-// --- azioni -----------------------------------------------------------------
+// --- actions ----------------------------------------------------------------
 
 async function readAll(btn) {
   await busy(btn, async () => {
     banner("");
-    const r = await api("/api/leggi", {});
+    const r = await api("/api/read", {});
     view = r.data; render(); renderExchanges(r.exchanges);
     const errs = Object.entries(r.errors || {});
     if (errs.length) banner(errs.map(([k, v]) => `${k}: ${v}`).join("\n"));
@@ -160,7 +160,7 @@ async function readAll(btn) {
 async function save(setting, payload, btn) {
   await busy(btn, async () => {
     banner("");
-    const plan = await api("/api/prepara", { setting, ...payload });
+    const plan = await api("/api/prepare", { setting, ...payload });
     const dry = $("#dry").checked || !plan.writes_enabled;
     $("#c-title").textContent = plan.label;
     $("#c-before").textContent = fmt(plan.before);
@@ -168,19 +168,19 @@ async function save(setting, payload, btn) {
     $("#c-warning").textContent = plan.warning || "";
     $("#c-warning").classList.toggle("hidden", !plan.warning);
     $("#c-mode").textContent = !plan.writes_enabled
-      ? "Le scritture sono disattivate sul server (WRITES_ENABLED=false): verrà solo registrata una prova a secco."
-      : dry ? "Prova a secco: i frame qui sotto NON verranno inviati." : "Verranno inviati questi frame, poi il valore verrà riletto:";
+      ? "Writes are disabled on the server (WRITES_ENABLED=false): only a dry run will be logged."
+      : dry ? "Dry run: the frames below will NOT be sent." : "These frames will be sent, then the value will be read back:";
     $("#c-frames").innerHTML = plan.frames.map((f) => `<li>${esc(f.description)}<br>${esc(f.request_hex)}</li>`).join("");
-    $("#c-go").textContent = dry ? "Registra prova a secco" : "Invia all'inverter";
+    $("#c-go").textContent = dry ? "Log dry run" : "Send to inverter";
     const dlg = $("#confirm");
     dlg.returnValue = "";
     dlg.showModal();
     const choice = await new Promise((res) => dlg.addEventListener("close", () => res(dlg.returnValue), { once: true }));
     if (choice !== "go") return;
-    const r = await api("/api/esegui", { id: plan.id, dry_run: dry });
+    const r = await api("/api/execute", { id: plan.id, dry_run: dry });
     view = r.data; render(); renderExchanges(r.exchanges);
-    const ok = r.outcome === "ok" || r.outcome === "prova a secco";
-    banner(`${plan.label}: ${r.outcome}${r.reread !== null && r.reread !== undefined ? ` — valore riletto: ${fmt(r.reread)}` : ""}${r.message ? `\n${r.message}` : ""}`, ok);
+    const ok = r.outcome === "ok" || r.outcome === "dry run";
+    banner(`${plan.label}: ${r.outcome}${r.reread !== null && r.reread !== undefined ? ` — value read back: ${fmt(r.reread)}` : ""}${r.message ? `\n${r.message}` : ""}`, ok);
     loadLog().catch(() => {});
   });
 }
@@ -206,7 +206,7 @@ document.addEventListener("click", (ev) => {
   else if (s === "export_limit_w") save(s, { value: Number($("#export-limit").value) }, t);
   else if (t.hasAttribute("data-eco-save")) {
     const g = ecoPayload(t.closest(".eco-card"));
-    if (!g.days) { banner("Seleziona almeno un giorno."); return; }
+    if (!g.days) { banner("Select at least one day."); return; }
     save("eco_group", { group: g }, t);
   } else if (t.dataset.ecoToggle !== undefined) {
     const card = t.closest(".eco-card");
@@ -217,7 +217,7 @@ document.addEventListener("click", (ev) => {
 $("#refresh").addEventListener("click", (e) => readAll(e.currentTarget));
 $("#read-protection").addEventListener("click", (e) => busy(e.currentTarget, async () => {
   banner("");
-  const r = await api("/api/leggi/protezioni", {});
+  const r = await api("/api/read/protection", {});
   view = r.data; render(); renderExchanges(r.exchanges);
   const errs = Object.values(r.errors || {});
   if (errs.length) banner(errs.join("\n"));
@@ -227,7 +227,7 @@ $("#cfg").addEventListener("submit", (e) => {
   e.preventDefault();
   busy(e.submitter, async () => {
     config = await api("/api/config", { host: $("#host").value.trim(), port: Number($("#port").value) || 8899 });
-    banner(`IP salvato: ${config.host}`, true);
+    banner(`IP saved: ${config.host}`, true);
     await readAll(null);
   });
 });
@@ -238,10 +238,10 @@ $("#cfg").addEventListener("submit", (e) => {
     $("#host").value = config.host || "";
     $("#port").value = config.port || 8899;
     const b = $("#wr-badge");
-    b.textContent = config.writes_enabled ? "scritture abilitate" : "sola lettura";
+    b.textContent = config.writes_enabled ? "writes enabled" : "read-only";
     b.classList.toggle("on", !!config.writes_enabled);
     loadLog().catch(() => {});
     if (config.host) await readAll(null);
-    else banner("Inserisci l'IP dell'inverter e premi «Salva IP».");
+    else banner("Enter the inverter IP and press “Save IP”.");
   } catch (e) { banner(e.message); }
 })();

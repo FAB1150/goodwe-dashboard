@@ -1,69 +1,71 @@
-# Portale GoodWe
+# goodwe-dashboard
 
-Pagina web self-hosted per leggere e modificare le impostazioni di un inverter ibrido
-**GoodWe ES/EM** (provato sul GW5048-EM) al posto della pagina impostazioni di SolarGo.
+A self-hosted web page to read and change the settings of a **GoodWe ES/EM** hybrid inverter
+(developed for a GW5048-EM), as a replacement for the settings pages of the SolarGo app.
 
-- Parla con il modulo WiFi in **UDP sulla porta 8899** con gli stessi comandi di SolarGo
-  (dettagli in [docs/PROTOCOLLO.md](docs/PROTOCOLLO.md)).
-- **Nessuna interrogazione continua**: legge solo quando apri la pagina o premi
-  «Leggi dall'inverter», e scrive solo quando confermi un salvataggio.
-- Dopo ogni scrittura **rilegge** il valore e indica se l'inverter l'ha preso; ogni modifica
-  finisce nel **registro** (quando, cosa, prima, richiesto, riletto, esito).
-- Con la **prova a secco** vedi i frame esatti che verrebbero inviati, senza inviarli.
-- I **parametri di protezione di interfaccia rete (CEI 0-21)** si possono solo leggere: il
-  portale non contiene comandi per scriverli.
+- Talks to the WiFi module over **UDP port 8899** using the same commands as SolarGo
+  (details in [docs/PROTOCOL.md](docs/PROTOCOL.md)).
+- **No polling**: it reads only when you open the page or press "Read from inverter", and
+  writes only when you confirm a save.
+- After every write it **reads the value back** and reports whether the inverter accepted it;
+  every change goes into a **change log** (when, what, before, requested, read back, outcome).
+- **Dry run** shows the exact frames that would be sent, without sending them.
+- **Grid interface protection parameters** (e.g. Italian CEI 0-21) are read-only: the portal
+  contains no commands to write them.
 
-## Cosa si può modificare
+> Unofficial project, not affiliated with GoodWe. Changing inverter settings is at your own
+> risk; start in read-only mode and compare the values with SolarGo.
 
-| Sezione | Impostazioni |
+## What can be changed
+
+| Section | Settings |
 |---|---|
-| Modalità di lavoro | Generale, Backup, Eco (off-grid solo visualizzata) |
-| Fasce eco | 4 fasce: orari, carica/scarica, potenza %, giorni, attiva/disattiva |
-| Batteria | Protezione SoC, DoD in rete, DoD fuori rete |
-| Rete | Limite di immissione (W) |
+| Work mode | General, Backup, Eco (off-grid is shown only) |
+| Eco groups | 4 groups: times, charge/discharge, power %, days, enable/disable |
+| Battery | SoC protection, on-grid DoD, off-grid DoD |
+| Grid | Export limit (W) |
 
-Tutto il resto viene mostrato in sola lettura.
+Everything else is shown read-only.
 
-## Installazione con Portainer (Raspberry Pi 4)
+## Install with Portainer (e.g. Raspberry Pi 4)
 
 1. Portainer → **Stacks** → **Add stack** → **Repository**.
-2. Repository URL: `https://github.com/FAB1150/goodwe-dashboard`, reference: il branch da
-   usare (per ora `refs/heads/claude/portale-goodwe`), compose path: `docker-compose.yml`.
-3. **Deploy the stack**. La prima volta l'immagine viene costruita sul Raspberry (un paio di
-   minuti).
-4. Apri `http://<ip-del-raspberry>:8080`, inserisci l'IP dell'inverter (es. `10.10.30.149`) e
-   premi **Salva IP**. L'IP resta salvato nel volume `portale-goodwe-dati`.
+2. Repository URL: `https://github.com/FAB1150/goodwe-dashboard`, reference:
+   `refs/heads/main`, compose path: `docker-compose.yml`.
+3. **Deploy the stack**. The first time the image is built on the device (a couple of minutes).
+4. Open `http://<host-ip>:8080`, enter the inverter IP and press **Save IP**. The IP is stored
+   in the `goodwe-dashboard-data` volume.
 
-Il Raspberry deve poter raggiungere l'inverter in UDP sulla porta 8899 (se l'inverter è in
-un'altra VLAN, il firewall deve permettere UDP 8899 in uscita dal Raspberry e le risposte).
-Con la rete bridge di Docker di solito basta così; se le risposte non arrivano, prova
-`network_mode: host` nel compose (togliendo la sezione `ports`).
+The host must reach the inverter over UDP port 8899 (if the inverter is in another VLAN, the
+firewall must allow UDP 8899 from the host and the replies). Docker's bridge network usually
+works; if replies never arrive, try `network_mode: host` in the compose file (and remove the
+`ports` section).
 
-### Variabili d'ambiente
+### Environment variables
 
-| Variabile | Predefinito | Significato |
+| Variable | Default | Meaning |
 |---|---|---|
-| `WRITES_ENABLED` | `false` | Con `false` il portale non invia **nessuna** scrittura: tutto finisce in prova a secco. |
-| `INVERTER_HOST` | vuoto | IP iniziale (si può cambiare dalla pagina). |
-| `PORTAL_USER` / `PORTAL_PASSWORD` | `admin` / vuoto | Se la password è impostata, la pagina chiede un login (HTTP Basic). Utile se un giorno lo metti dietro nginx. |
+| `WRITES_ENABLED` | `false` | With `false` the portal sends **no** writes at all: everything is a dry run. |
+| `INVERTER_HOST` | empty | Initial IP (can be changed from the page). |
+| `PORTAL_USER` / `PORTAL_PASSWORD` | `admin` / empty | If a password is set, the page asks for a login (HTTP Basic). Useful behind a reverse proxy. |
 
-## Come procedere con le prove
+## Suggested testing order
 
-1. **Fase 1, sola lettura** (`WRITES_ENABLED=false`): apri la pagina e confronta i valori con
-   SolarGo e con Home Assistant. Nella sezione *Diagnostica* trovi i frame scambiati.
-2. **Fase 2, scritture**: imposta `WRITES_ENABLED=true`, aggiorna lo stack e prova una
-   impostazione alla volta, partendo da quelle meno delicate (limite di immissione, poi fasce
-   eco, poi protezione SoC e DoD). Lascia attiva la **prova a secco** per vedere prima i frame,
-   poi toglila per inviare. Ogni invio chiede conferma.
+1. **Read-only** (`WRITES_ENABLED=false`): open the page and compare the values with SolarGo
+   and Home Assistant. The *Diagnostics* section shows the raw frames exchanged.
+2. **Writes**: set `WRITES_ENABLED=true`, redeploy, and try one setting at a time, starting
+   with the least sensitive ones (export limit, then eco groups, then SoC protection and DoD).
+   Keep **Dry run** on to inspect the frames first, then turn it off to send. Every send asks
+   for confirmation.
 
-## Sviluppo
+## Development
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                  # test di framing e API (con un inverter finto)
-python -m tests.fake_inverter 18899     # inverter finto su 127.0.0.1:18899
+pytest                                  # framing and API tests (with a fake inverter)
+python -m tests.fake_inverter 18899     # fake inverter on 127.0.0.1:18899
 DATA_DIR=./data uvicorn app.main:app --port 8080
 ```
 
-I test usano risposte registrate da inverter ES/EM reali, prese dai test della libreria
-[`goodwe`](https://github.com/marcelblijleven/goodwe) (licenza MIT).
+The tests use responses recorded from real ES/EM inverters, taken from the tests of the
+[`goodwe`](https://github.com/marcelblijleven/goodwe) library (MIT licence).

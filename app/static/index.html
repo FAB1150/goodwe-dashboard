@@ -1,28 +1,28 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Portale GoodWe</title>
+<title>GoodWe Portal</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header class="top">
   <div class="brand">
-    <h1>Portale GoodWe</h1>
+    <h1>GoodWe Portal</h1>
     <span id="wr-badge" class="badge muted">…</span>
   </div>
   <form id="cfg" class="cfg" autocomplete="off">
-    <label for="host">IP inverter</label>
-    <input id="host" name="host" placeholder="es. 10.10.30.149" inputmode="decimal" required>
-    <input id="port" name="port" type="number" min="1" max="65535" value="8899" title="Porta UDP" aria-label="Porta UDP">
-    <button type="submit" class="secondary">Salva IP</button>
+    <label for="host">Inverter IP</label>
+    <input id="host" name="host" placeholder="e.g. 192.168.1.50" inputmode="decimal" required>
+    <input id="port" name="port" type="number" min="1" max="65535" value="8899" title="UDP port" aria-label="UDP port">
+    <button type="submit" class="secondary">Save IP</button>
   </form>
   <div class="actions">
-    <label class="switch" title="Con la prova a secco attiva il portale mostra i frame senza inviarli">
-      <input type="checkbox" id="dry" checked> <span>Prova a secco</span>
+    <label class="switch" title="In dry-run mode the portal shows the frames without sending them">
+      <input type="checkbox" id="dry" checked> <span>Dry run</span>
     </label>
-    <button id="refresh" class="primary">Leggi dall'inverter</button>
+    <button id="refresh" class="primary">Read from inverter</button>
   </div>
 </header>
 
@@ -37,69 +37,69 @@
   </section>
 
   <section class="card" id="sec-mode">
-    <h2>Modalità di lavoro</h2>
+    <h2>Work mode</h2>
     <div class="row">
-      <select id="work-mode" aria-label="Modalità di lavoro">
-        <option value="0">Generale (autoconsumo)</option>
+      <select id="work-mode" aria-label="Work mode">
+        <option value="0">General (self-use)</option>
         <option value="2">Backup</option>
-        <option value="3">Eco (fasce orarie)</option>
+        <option value="3">Eco (time schedule)</option>
       </select>
-      <button class="primary" data-save="work_mode">Salva</button>
+      <button class="primary" data-save="work_mode">Save</button>
       <span id="work-mode-current" class="muted"></span>
     </div>
-    <p class="muted small">La modalità fuori rete (off-grid) è solo visualizzata: il portale non la imposta.</p>
+    <p class="muted small">Off-grid mode is shown only: the portal does not set it.</p>
     <dl id="mode-extra" class="kv"></dl>
   </section>
 
   <section class="card" id="sec-eco">
-    <h2>Fasce eco (carica / scarica programmata)</h2>
-    <p class="muted small">Quattro fasce, come in SolarGo per il tuo firmware. Potenza in % della nominale; le fasce non
-      possono attraversare la mezzanotte (per 22:00–06:00 usa due fasce). Salvare o attivare una fascia imposta anche
-      la modalità Eco, come fa SolarGo.</p>
+    <h2>Eco groups (scheduled charge / discharge)</h2>
+    <p class="muted small">Four groups, as SolarGo offers for this firmware. Power is a % of the rated power; a group
+      cannot cross midnight (for 22:00–06:00 use two groups). Saving or enabling a group also sets the Eco work
+      mode, as SolarGo does.</p>
     <div id="timeline" class="timeline" aria-hidden="true"></div>
     <div id="eco" class="eco-grid"></div>
   </section>
 
   <section class="card" id="sec-battery">
-    <h2>Batteria</h2>
+    <h2>Battery</h2>
     <div class="form-grid">
-      <label for="soc-protect">Protezione SoC</label>
+      <label for="soc-protect">SoC protection</label>
       <div class="row">
-        <select id="soc-protect"><option value="1">attiva</option><option value="0">disattivata</option></select>
-        <button class="primary" data-save="soc_protect">Salva</button>
+        <select id="soc-protect"><option value="1">on</option><option value="0">off</option></select>
+        <button class="primary" data-save="soc_protect">Save</button>
       </div>
-      <label for="ongrid-dod">DoD in rete</label>
+      <label for="ongrid-dod">On-grid DoD</label>
       <div class="row">
         <input id="ongrid-dod" type="number" min="0" max="95" step="1"><span>%</span>
-        <button class="primary" data-save="ongrid_dod">Salva</button>
+        <button class="primary" data-save="ongrid_dod">Save</button>
         <span class="muted small" id="ongrid-dod-hint"></span>
       </div>
-      <label for="offgrid-dod">DoD fuori rete</label>
+      <label for="offgrid-dod">Off-grid DoD</label>
       <div class="row">
         <input id="offgrid-dod" type="number" min="0" max="95" step="1"><span>%</span>
-        <button class="primary" data-save="offgrid_dod">Salva</button>
+        <button class="primary" data-save="offgrid_dod">Save</button>
       </div>
     </div>
-    <details><summary>Altri valori batteria (solo lettura)</summary><dl id="battery-extra" class="kv"></dl></details>
+    <details><summary>Other battery values (read-only)</summary><dl id="battery-extra" class="kv"></dl></details>
   </section>
 
   <section class="card" id="sec-grid">
-    <h2>Rete e immissione</h2>
+    <h2>Grid and export</h2>
     <div class="form-grid">
-      <label for="export-limit">Limite di immissione</label>
+      <label for="export-limit">Export limit</label>
       <div class="row">
         <input id="export-limit" type="number" min="0" max="10000" step="10"><span>W</span>
-        <button class="primary" data-save="export_limit_w">Salva</button>
+        <button class="primary" data-save="export_limit_w">Save</button>
       </div>
     </div>
     <dl id="grid-extra" class="kv"></dl>
   </section>
 
   <section class="card" id="sec-protection">
-    <h2>Protezioni di interfaccia rete (CEI 0-21) <span class="badge lock">solo lettura</span></h2>
-    <p class="muted small">Questi parametri si possono solo leggere: il portale non contiene comandi per scriverli.
-      Vengono letti solo quando premi il pulsante.</p>
-    <button id="read-protection" class="secondary">Leggi parametri di protezione</button>
+    <h2>Grid interface protection (CEI 0-21) <span class="badge lock">read-only</span></h2>
+    <p class="muted small">These parameters can only be read: the portal contains no commands to write them.
+      They are read only when you press the button.</p>
+    <button id="read-protection" class="secondary">Read protection parameters</button>
     <div class="cols">
       <dl id="protection" class="kv"></dl>
       <dl id="connect" class="kv"></dl>
@@ -107,16 +107,16 @@
   </section>
 
   <section class="card" id="sec-log">
-    <h2>Registro modifiche</h2>
-    <button id="load-log" class="secondary">Aggiorna registro</button>
+    <h2>Change log</h2>
+    <button id="load-log" class="secondary">Refresh log</button>
     <div class="table-wrap"><table id="log"><thead><tr>
-      <th>Quando</th><th>Impostazione</th><th>Prima</th><th>Richiesto</th><th>Riletto</th><th>Esito</th>
+      <th>When</th><th>Setting</th><th>Before</th><th>Requested</th><th>Read back</th><th>Outcome</th>
     </tr></thead><tbody></tbody></table></div>
   </section>
 
   <section class="card" id="sec-diag">
     <details>
-      <summary>Diagnostica: ultimi scambi con l'inverter</summary>
+      <summary>Diagnostics: latest exchanges with the inverter</summary>
       <div id="exchanges" class="exchanges"></div>
     </details>
   </section>
@@ -125,13 +125,13 @@
 <dialog id="confirm">
   <form method="dialog">
     <h3 id="c-title"></h3>
-    <p><span class="muted">Prima:</span> <b id="c-before"></b><br><span class="muted">Dopo:</span> <b id="c-after"></b></p>
+    <p><span class="muted">Before:</span> <b id="c-before"></b><br><span class="muted">After:</span> <b id="c-after"></b></p>
     <p id="c-warning" class="warn hidden"></p>
     <p id="c-mode" class="small"></p>
     <ol id="c-frames" class="frames"></ol>
     <div class="row end">
-      <button value="cancel" class="secondary">Annulla</button>
-      <button id="c-go" value="go" class="primary">Invia</button>
+      <button value="cancel" class="secondary">Cancel</button>
+      <button id="c-go" value="go" class="primary">Send</button>
     </div>
   </form>
 </dialog>
